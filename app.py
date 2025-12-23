@@ -822,8 +822,8 @@ with st.sidebar:
     st.markdown("### 🔑 API 配置")
     
     # 优先从环境变量读取
-    default_api_key = "sk-bde9ea0d21a74948bd72fd113f928605"
-    
+    default_api_key = "sk-1234"
+     
     api_key = st.text_input(
         "DashScope API Key (阿里千问)",
         type="password",
