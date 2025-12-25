@@ -24,16 +24,30 @@ pip install -r requirements.txt
 
 ### 配置 API Key
 
-在项目根目录创建 `.env` 文件，或直接在代码中配置：
+**推荐方式（使用 .env 文件）**：
+
+1. 复制 `.env.example` 为 `.env`：
+   ```bash
+   cp .env.example .env
+   ```
+
+2. 编辑 `.env` 文件，填入你的 API Key：
+   ```bash
+   DASHSCOPE_API_KEY=your-dashscope-api-key-here
+   ```
+
+**备选方式（环境变量）**：
 
 ```bash
 export DASHSCOPE_API_KEY="your-dashscope-api-key"
 ```
 
-获取 API Key：
+**获取 API Key**：
 1. 访问 https://dashscope.console.aliyun.com/
 2. 注册/登录阿里云账号
 3. 在 API-KEY 管理页面创建新的 API Key
+
+> 💡 **提示**：`.env` 文件已在 `.gitignore` 中，不会被提交到 Git，可以安全地存储你的 API Key。
 
 ### 构建知识库
 
