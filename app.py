@@ -14,6 +14,10 @@ import os
 import json
 from enum import Enum
 from typing import Optional
+from dotenv import load_dotenv
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 # RAG 相关导入
 from langchain_community.embeddings import DashScopeEmbeddings
@@ -304,10 +308,45 @@ def perform_rag_query(vectorstore, llm, question):
         return None, []
     
     try:
-        # 1. 检索相关文档（直接使用 similarity_search 方法）
-        docs = vectorstore.similarity_search(question, k=3)
+        # 1. 检索相关文档（使用 similarity_search_with_score 获取距离分数）
+        # 使用更大的 k 值，然后去重和过滤
+        try:
+            docs_with_scores = vectorstore.similarity_search_with_score(question, k=10)
+        except:
+            # 如果不支持 similarity_search_with_score，回退到普通搜索
+            docs = vectorstore.similarity_search(question, k=5)
+            # 简单去重，返回所有不重复的文档
+            unique_docs = []
+            seen_contents = set()
+            for doc in docs:
+                content_fingerprint = doc.page_content[:150].strip()
+                if content_fingerprint not in seen_contents:
+                    seen_contents.add(content_fingerprint)
+                    unique_docs.append(doc)
+            docs = unique_docs  # 返回所有去重后的文档，不限制数量
+        else:
+            # 2. 去重：基于文档内容的相似度去重
+            # ChromaDB 返回的是距离（distance），越小越相似
+            # 通常距离 < 1.5 表示比较相关
+            unique_docs = []
+            seen_contents = set()
+            max_distance = 1.5  # 最大距离阈值（根据实际调整）
+            
+            for doc, distance in docs_with_scores:
+                # 过滤距离过大的结果（相似度太低）
+                if distance > max_distance:
+                    continue
+                
+                # 检查内容是否重复（使用前150个字符作为指纹，更准确）
+                content_fingerprint = doc.page_content[:150].strip()
+                if content_fingerprint not in seen_contents:
+                    seen_contents.add(content_fingerprint)
+                    unique_docs.append(doc)
+                    # 不再限制数量，返回所有相关且不重复的文档
+            
+            docs = unique_docs  # 返回所有相关且去重后的文档
         
-        # 2. 构建上下文
+        # 3. 构建上下文
         context = "\n\n".join([doc.page_content for doc in docs])
         
         # 3. 构建 Prompt
@@ -521,14 +560,28 @@ def convert_topics_to_aggregated_format(topics, reviews_df):
         reviews_df = reviews_df.copy()
         reviews_df['review_id'] = range(1, len(reviews_df) + 1)
     
+    # 收集所有已归类的 review_ids，用于检测重复和遗漏
+    all_classified_review_ids = set()
+    
     for topic_data in topics:
         topic = topic_data.get('topic', '未知问题')
         review_ids = topic_data.get('review_ids', [])
         summary = topic_data.get('summary', '')
         
+        # 去重：如果同一个 review_id 出现在多个 topics 中，只保留第一次出现的
+        unique_review_ids = []
+        for rid in review_ids:
+            if rid not in all_classified_review_ids:
+                unique_review_ids.append(rid)
+                all_classified_review_ids.add(rid)
+        
+        # 如果去重后没有有效的 review_ids，跳过这个 topic
+        if not unique_review_ids:
+            continue
+        
         # 根据 review_ids 从 DataFrame 中反查评论内容
         reviews = []
-        for rid in review_ids:
+        for rid in unique_review_ids:
             matching_rows = reviews_df[reviews_df['review_id'] == rid]
             if not matching_rows.empty:
                 review_text = matching_rows.iloc[0].get('review_text', '') or matching_rows.iloc[0].get('content', '')
@@ -537,14 +590,40 @@ def convert_topics_to_aggregated_format(topics, reviews_df):
         
         aggregated.append({
             'complaint': topic,
-            'count': len(review_ids),
+            'count': len(unique_review_ids),  # 使用去重后的数量
             'reviews': reviews,
             'summary': summary,
-            'review_ids': review_ids
+            'review_ids': unique_review_ids  # 保存去重后的 review_ids
         })
     
     # 按出现次数降序排列
     aggregated.sort(key=lambda x: x['count'], reverse=True)
+    
+    # 验证：检查是否有遗漏的负面评论
+    all_negative_review_ids = set(reviews_df['review_id'].tolist())
+    unclassified_ids = all_negative_review_ids - all_classified_review_ids
+    
+    if unclassified_ids:
+        # 如果有未归类的评论，创建一个"其他问题"类别，确保所有评论都被统计
+        unclassified_reviews = []
+        for rid in unclassified_ids:
+            matching_rows = reviews_df[reviews_df['review_id'] == rid]
+            if not matching_rows.empty:
+                review_text = matching_rows.iloc[0].get('review_text', '') or matching_rows.iloc[0].get('content', '')
+                if review_text:
+                    unclassified_reviews.append(review_text)
+        
+        # 创建"其他问题"类别
+        aggregated.append({
+            'complaint': '其他问题',
+            'count': len(unclassified_ids),
+            'reviews': unclassified_reviews,
+            'summary': f'包含 {len(unclassified_ids)} 条未明确归类到特定问题类型的负面评论',
+            'review_ids': list(unclassified_ids)
+        })
+        
+        # 重新排序（因为添加了新项）
+        aggregated.sort(key=lambda x: x['count'], reverse=True)
     
     return aggregated
 
@@ -601,8 +680,16 @@ def match_with_spec(complaint, qa_chain=None):
         if not spec_match and source_docs:
             spec_match = "\n\n".join([doc.page_content[:200] + "..." for doc in source_docs[:2]])
         
-        # 返回源文档内容用于展示
-        source_contents = [doc.page_content for doc in source_docs]
+        # 返回源文档内容用于展示（去重）
+        source_contents = []
+        seen_contents = set()
+        for doc in source_docs:
+            content = doc.page_content
+            # 使用前100个字符作为指纹去重
+            fingerprint = content[:100].strip()
+            if fingerprint not in seen_contents:
+                seen_contents.add(fingerprint)
+                source_contents.append(content)
         
         return spec_match, conclusion, source_contents
         
@@ -822,20 +909,26 @@ with st.sidebar:
     st.markdown("### 🔑 API 配置")
     
     # 优先从环境变量读取
-    default_api_key = "sk-1234"
-     
-    api_key = st.text_input(
-        "DashScope API Key (阿里千问)",
-        type="password",
-        value=default_api_key,
-        placeholder="sk-...",
-        help="用于 RAG 深度分析功能（从环境变量 DASHSCOPE_API_KEY 读取，或在此输入）"
-    )
+    env_api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    default_api_key = env_api_key if env_api_key else ""
     
-    if api_key:
-        st.success("✅ API Key 已配置")
+    # 如果环境变量中有，显示提示；否则允许用户输入
+    if env_api_key:
+        st.info("✅ 已从环境变量 `DASHSCOPE_API_KEY` 读取 API Key")
+        api_key = env_api_key
     else:
-        st.warning("⚠️ 请配置 API Key 以启用 RAG 分析功能")
+        api_key = st.text_input(
+            "DashScope API Key (阿里千问)",
+            type="password",
+            value="",
+            placeholder="sk-... 或设置环境变量 DASHSCOPE_API_KEY",
+            help="用于 RAG 深度分析功能。推荐方式：在项目根目录创建 .env 文件，添加 DASHSCOPE_API_KEY=your-key"
+        )
+        
+        if api_key:
+            st.success("✅ API Key 已配置（临时，仅本次会话有效）")
+        else:
+            st.warning("⚠️ 请配置 API Key 以启用 RAG 分析功能")
     
     st.divider()
     
@@ -930,6 +1023,8 @@ if analyze_button:
         # Step 1
         st.toast("📥 正在提取负面评价...")
         negative_reviews = get_negative_reviews(reviews_df)
+        # 存储负面评论总数，供后续显示使用
+        st.session_state['total_negative_reviews'] = len(negative_reviews)
         time.sleep(0.3)
         progress_bar.progress(25)
         
@@ -997,8 +1092,22 @@ if 'aggregated_complaints' in st.session_state:
     
     col_chart, col_insight = st.columns([2, 1])
     
+    # 获取总负面评论数，用于计算百分比
+    total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
+    
     with col_chart:
+        # 计算每个问题的百分比（基于总负面评论数，而不是去重后的数量）
+        complaint_counts_with_pct = complaint_counts.copy()
+        complaint_counts_with_pct['百分比'] = (complaint_counts_with_pct['出现次数'] / total_negative_count * 100).round(1)
+        
+        # 计算每个问题的百分比（基于总负面评论数）
+        custom_percentages = []
+        for idx, row in complaint_counts_with_pct.iterrows():
+            pct = row['百分比']
+            custom_percentages.append(pct)
+        
         # 创建可交互的饼图
+        # 使用 texttemplate 来显示标签和基于总负面评论数的百分比
         fig = go.Figure(data=[go.Pie(
             labels=complaint_counts['问题类型'],
             values=complaint_counts['出现次数'],
@@ -1007,10 +1116,12 @@ if 'aggregated_complaints' in st.session_state:
                 colors=colors,
                 line=dict(color='#ffffff', width=2)
             ),
-            textinfo='label+percent',
+            texttemplate='%{label}<br>%{text}',  # 自定义文本模板：显示标签和百分比
+            text=[f"{pct:.1f}%" for pct in custom_percentages],  # 显示基于总负面评论数的百分比
             textposition='outside',
             textfont=dict(size=12),
-            hovertemplate="<b>%{label}</b><br>出现次数: %{value}<br>占比: %{percent}<extra></extra>",
+            hovertemplate="<b>%{label}</b><br>出现次数: %{value}<br>占比: %{customdata:.1f}%<extra></extra>",
+            customdata=custom_percentages,  # 传递百分比数据用于 hover
             pull=[0.05 if i == 0 else 0 for i in range(n_issues)]  # 突出最严重的问题
         )])
         
@@ -1022,7 +1133,7 @@ if 'aggregated_complaints' in st.session_state:
             plot_bgcolor='rgba(0,0,0,0)',
             annotations=[
                 dict(
-                    text=f"<b>{len(complaints)}</b><br>条负面反馈",
+                    text=f"<b>{len(sorted_complaints)}</b><br>类负面评论",
                     x=0.5, y=0.5,
                     font=dict(size=14, color='#374151'),
                     showarrow=False
@@ -1052,9 +1163,9 @@ if 'aggregated_complaints' in st.session_state:
         top_issue = sorted_complaints[0]['complaint']
         top_count = sorted_complaints[0]['count']
         
-        # 严重程度指示器
-        total_count = sum(agg['count'] for agg in sorted_complaints)
-        severity_pct = top_count / total_count * 100 if total_count > 0 else 0
+        # 严重程度指示器 - 使用总负面评论数
+        total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
+        severity_pct = top_count / total_negative_count * 100 if total_negative_count > 0 else 0
         if severity_pct >= 50:
             severity_label = "🔴 高度集中"
             severity_color = "#dc2626"
@@ -1080,9 +1191,9 @@ if 'aggregated_complaints' in st.session_state:
         # 显示其他问题的简要统计
         if len(sorted_complaints) > 1:
             st.markdown("**📋 其他问题**")
-            total_count = sum(agg['count'] for agg in sorted_complaints)
+            total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
             for agg in sorted_complaints[1:]:
-                pct = agg['count'] / total_count * 100 if total_count > 0 else 0
+                pct = agg['count'] / total_negative_count * 100 if total_negative_count > 0 else 0
                 st.markdown(f"- {agg['complaint']}: **{agg['count']}** 次 ({pct:.0f}%)")
     
     # 过滤控制
@@ -1103,8 +1214,8 @@ if 'aggregated_complaints' in st.session_state:
         display_complaints = [agg for agg in aggregated_complaints if agg['complaint'] == current_filter]
         st.caption(f"已过滤显示 **{len(display_complaints)}** 类问题")
     else:
-        # 计算总评论数
-        total_review_count = sum(agg['count'] for agg in aggregated_complaints)
+        # 使用实际的负面评论总数
+        total_review_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in aggregated_complaints))
         st.caption(f"共识别出 **{len(aggregated_complaints)}** 类问题，涉及 **{total_review_count}** 条负面评价")
     
     # 获取 RAG 组件（如果已初始化）
@@ -1180,11 +1291,11 @@ if 'aggregated_complaints' in st.session_state:
                     # 内容较短，直接显示
                     st.markdown(f"<div style='background-color: #f0f9ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #0ea5e9;'>{spec_match}</div>", unsafe_allow_html=True)
                 
-                # 如果有源文档，显示证据来源
+                # 如果有源文档，显示证据来源（显示所有相关证据，不限制数量）
                 if source_docs:
                     st.markdown("")
-                    with st.expander("📚 检索到的证据来源", expanded=False):
-                        for i, doc in enumerate(source_docs[:3], 1):
+                    with st.expander(f"📚 检索到的证据来源 ({len(source_docs)} 条)", expanded=False):
+                        for i, doc in enumerate(source_docs, 1):
                             st.markdown(f"**证据 {i}:**")
                             # 使用 text_area 显示完整内容，支持滚动
                             st.text_area(
@@ -1195,7 +1306,7 @@ if 'aggregated_complaints' in st.session_state:
                                 disabled=True,
                                 label_visibility="collapsed"
                             )
-                            if i < len(source_docs[:3]):
+                            if i < len(source_docs):
                                 st.markdown("---")
                 
                 st.markdown("##### 🤖 AI 判定结论")
