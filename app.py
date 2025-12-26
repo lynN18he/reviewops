@@ -946,20 +946,41 @@ st.markdown('<h1 class="main-title">ReviewOps</h1>', unsafe_allow_html=True)
 st.markdown("**用户反馈决策中台** · 让产品决策有据可依")
 st.markdown("---")
 
+# ==================== 全局状态初始化 (SSOT) ====================
+# 检查并初始化 all_reviews（Single Source of Truth）
+if 'all_reviews' not in st.session_state:
+    # 初始化：从 CSV 文件加载历史数据
+    st.session_state.all_reviews = reviews_df.to_dict('records')
+    st.session_state.last_run_increment = 0
+
+# 初始化 RAG 分析结果存储
+if 'latest_rag_results' not in st.session_state:
+    st.session_state.latest_rag_results = []
+
+# 检查是否需要延迟刷新页面（让用户先看到工作流结果）
+if st.session_state.get('need_refresh', False):
+    st.session_state['need_refresh'] = False
+    # 延迟刷新，让用户有时间看清完成提示
+    time.sleep(1)
+    st.rerun()
+
 # ==================== 顶部 Dashboard ====================
 st.markdown("## 📈 数据概览")
 
-# 计算指标
-total_reviews, avg_rating, negative_ratio = calculate_metrics(reviews_df)
+# 计算指标 - 基于 session_state.all_reviews（SSOT）
+all_reviews_df = pd.DataFrame(st.session_state.all_reviews)
+total_reviews, avg_rating, negative_ratio = calculate_metrics(all_reviews_df)
 
 # 三个指标卡片
 col1, col2, col3 = st.columns(3)
 
 with col1:
+    # 动态显示增量（基于 last_run_increment）
+    delta_text = f"本次新增 {st.session_state.last_run_increment} 条" if st.session_state.last_run_increment > 0 else None
     st.metric(
         label="📝 总评论数",
         value=f"{total_reviews}",
-        delta="本周新增 5 条",
+        delta=delta_text,
         delta_color="normal"
     )
 
@@ -983,19 +1004,236 @@ st.markdown("")
 
 # AI 每日简报
 with st.expander("🤖 **AI 每日简报** - 点击展开", expanded=True):
-    ai_brief = generate_ai_brief(reviews_df, negative_ratio)
+    ai_brief = generate_ai_brief(all_reviews_df, negative_ratio)
     st.markdown(ai_brief)
 
 st.markdown("---")
+
+# ==================== 智能工作流区 ====================
+st.markdown("## ⚡ 智能工作流")
+st.caption("基于 LangGraph 的自动化巡检系统，自动监控、筛选、分析和生成行动建议")
+
+# 工作流按钮
+col_workflow, col_manual, col_space = st.columns([1, 1, 2])
+with col_workflow:
+    workflow_button = st.button("⚡ 运行智能工作流", use_container_width=True, type="primary")
+with col_manual:
+    analyze_button = st.button("🚀 手动归因分析", use_container_width=True)
+
+# ==================== 智能工作流执行 ====================
+if workflow_button:
+    # 检查 API Key
+    if not api_key:
+        st.error("❌ 请先在侧边栏配置 DashScope API Key")
+        st.stop()
+    
+    try:
+        # 导入工作流
+        from agent_graph import graph_app
+        
+        # 初始化状态
+        initial_state = {
+            "raw_reviews": [],
+            "critical_reviews": [],
+            "rag_analysis_results": [],
+            "action_plans": [],
+            "logs": []
+        }
+        
+        # 使用 st.status 展示实时日志
+        with st.status("🔄 工作流运行中...", expanded=True) as status:
+            st.write("🚀 启动智能工作流...")
+            
+            # 数据同步：使用 stream() 监听流式输出
+            final_state = initial_state.copy()
+            for event in graph_app.stream(initial_state):
+                # 遍历每个节点的输出
+                for node_name, node_output in event.items():
+                    # 合并状态
+                    if isinstance(node_output, dict):
+                        final_state.update(node_output)
+                    
+                    # 检测 node_monitor 产出的 raw_reviews
+                    if node_name == "monitor" and isinstance(node_output, dict) and "raw_reviews" in node_output:
+                        new_reviews = node_output.get("raw_reviews", [])
+                        if new_reviews:
+                            # 数据同步：立即追加到 session_state.all_reviews
+                            st.session_state.all_reviews.extend(new_reviews)
+                            st.session_state.last_run_increment = len(new_reviews)
+                            st.write(f"📥 数据同步：已添加 {len(new_reviews)} 条新评论到全局状态")
+                    
+                    # 检测 node_rag_analysis 产出的 rag_analysis_results
+                    if node_name == "rag_analysis" and isinstance(node_output, dict) and "rag_analysis_results" in node_output:
+                        rag_results = node_output.get("rag_analysis_results", [])
+                        if rag_results:
+                            # 保存 RAG 分析结果到 session_state，防止页面刷新后丢失
+                            st.session_state.latest_rag_results = rag_results
+                            st.write(f"📄 RAG 分析结果已保存：{len(rag_results)} 条")
+                    
+                    # 实时显示日志
+                    if isinstance(node_output, dict) and "logs" in node_output:
+                        logs = node_output.get("logs", [])
+                        for log in logs:
+                            st.write(log)
+                            time.sleep(0.2)  # 模拟实时更新
+            
+            status.update(label="✅ 工作流执行完成", state="complete")
+            
+            # 强制刷新：在工作流运行完毕、日志显示"✅ 完成"后，添加延迟然后刷新
+            st.write("⏳ 正在刷新页面以更新统计数据...")
+            time.sleep(1)
+            
+            # 标记需要刷新，但不在这里直接调用 st.rerun()（因为还在 status 容器内）
+            st.session_state['need_refresh'] = True
+        
+        # 显示结果摘要
+        st.success(f"✅ 工作流执行完成！")
+        
+        # 使用最终状态
+        result = final_state
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📥 新评论", len(result.get("raw_reviews", [])))
+        with col2:
+            st.metric("🔍 高危评论", len(result.get("critical_reviews", [])))
+        with col3:
+            st.metric("📄 归因结果", len(result.get("rag_analysis_results", [])))
+        with col4:
+            st.metric("💡 行动建议", len(result.get("action_plans", [])))
+        
+        # 显示行动建议卡片
+        action_plans = result.get("action_plans", [])
+        if action_plans:
+            st.markdown("---")
+            st.markdown("### 💡 生成的行动建议")
+            
+            # 按优先级排序
+            priority_order = {"High": 3, "Medium": 2, "Low": 1}
+            sorted_actions = sorted(
+                action_plans,
+                key=lambda x: (priority_order.get(x.get("priority", "Medium"), 2), x.get("title", "")),
+                reverse=True
+            )
+            
+            for idx, action in enumerate(sorted_actions, 1):
+                action_type = action.get("action_type", "Jira Ticket")
+                title = action.get("title", "")
+                content = action.get("content", "")
+                priority = action.get("priority", "Medium")
+                
+                # 优先级颜色
+                priority_colors = {
+                    "High": "🔴",
+                    "Medium": "🟡",
+                    "Low": "🟢"
+                }
+                priority_icon = priority_colors.get(priority, "🟡")
+                
+                # 行动类型图标
+                type_icons = {
+                    "Jira Ticket": "🐞",
+                    "Doc Update": "📝",
+                    "Email Draft": "📧",
+                    "Meeting": "📅"
+                }
+                type_icon = type_icons.get(action_type, "📋")
+                
+                with st.expander(f"{type_icon} **{title}** · {priority_icon} {priority} · {action_type}", expanded=(idx <= 2)):
+                    st.markdown(f"**优先级：** {priority}")
+                    st.markdown(f"**类型：** {action_type}")
+                    st.markdown(f"**内容：**")
+                    if len(content) > 500:
+                        st.text_area("", value=content, height=150, disabled=True, key=f"action_content_{idx}", label_visibility="collapsed")
+                    else:
+                        st.markdown(content)
+                    
+                    # Mock 按钮
+                    if action_type == "Jira Ticket":
+                        if st.button("🚀 推送至 Jira", key=f"workflow_jira_{idx}", use_container_width=True):
+                            ticket_id = f"DJI-2025-{1000 + idx}"
+                            st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
+                    elif action_type == "Doc Update":
+                        if st.button("📝 创建 Notion Task", key=f"workflow_notion_{idx}", use_container_width=True):
+                            st.toast("✅ Notion 任务已创建！", icon="🎉")
+                    elif action_type == "Email Draft":
+                        if st.button("📧 复制邮件", key=f"workflow_email_{idx}", use_container_width=True):
+                            st.toast("✅ 邮件内容已复制到剪贴板！", icon="🎉")
+                    elif action_type == "Meeting":
+                        if st.button("📅 创建会议", key=f"workflow_meeting_{idx}", use_container_width=True):
+                            st.toast("✅ 会议已创建！", icon="🎉")
+        
+        # 存储结果到 session_state
+        st.session_state['workflow_result'] = result
+        st.session_state['workflow_completed'] = True
+        
+        # 标记需要刷新页面（但不立即刷新，让用户先看到结果）
+        st.session_state['need_refresh'] = True
+        
+    except ImportError as e:
+        st.error(f"❌ 无法导入工作流模块: {e}")
+        st.info("💡 请确保 `agent_graph.py` 文件存在且已正确配置")
+    except Exception as e:
+        st.error(f"❌ 工作流执行失败: {e}")
+        st.exception(e)
 
 # ==================== 中间核心区：RAG 分析 ====================
 st.markdown("## 🔍 RAG 归因分析")
 st.caption("基于产品说明书对用户反馈进行智能归因，识别问题根源")
 
-# 分析按钮
-col_btn, col_space = st.columns([1, 3])
-with col_btn:
-    analyze_button = st.button("🚀 开始归因分析", use_container_width=True)
+# 显示工作流生成的 RAG 分析结果
+workflow_rag_results = st.session_state.get('latest_rag_results', [])
+if workflow_rag_results:
+    st.info(f"📊 工作流已生成 {len(workflow_rag_results)} 条 RAG 归因分析结果")
+    
+    for idx, rag_result in enumerate(workflow_rag_results, 1):
+        review_id = rag_result.get("review_id", f"未知_{idx}")
+        review_text = rag_result.get("review_text", "")
+        conclusion = rag_result.get("conclusion", "❓ 需要人工判断")
+        reason = rag_result.get("reason", "")
+        
+        # 根据结论类型设置颜色和图标
+        if "✅" in conclusion or "产品已知局限" in conclusion:
+            color = "🟢"
+            conclusion_type = "产品已知局限"
+        elif "⚠️" in conclusion or "需进一步调查" in conclusion:
+            color = "🟡"
+            conclusion_type = "需进一步调查"
+        else:
+            color = "🔵"
+            conclusion_type = "用户使用问题"
+        
+        # 提取问题标题（从评论中提取关键词）
+        title_keywords = ["续航", "避障", "云台", "抖动", "电池", "图传", "GPS", "虚标"]
+        title = "未知问题"
+        for keyword in title_keywords:
+            if keyword in review_text:
+                title = keyword + "相关问题"
+                break
+        
+        with st.expander(f"{color} **{conclusion_type}** · {title} (ID: {review_id})", expanded=(idx == 1)):
+            col_left, col_mid, col_right = st.columns([1, 1, 1])
+            
+            with col_left:
+                st.markdown("##### 💬 用户原话")
+                st.info(review_text)
+            
+            with col_mid:
+                st.markdown("##### 📖 RAG 证据")
+                # 这里暂时显示占位文本，后续可以接入真实的向量检索结果
+                st.warning("⚠️ 当前使用基础 RAG 逻辑，未接入向量检索。\n\n后续版本将显示从产品说明书中检索到的相关证据片段。")
+            
+            with col_right:
+                st.markdown("##### 🤖 AI 判定")
+                st.markdown(f"**结论：** {conclusion}")
+                st.markdown(f"**分析：** {reason if reason else '暂无详细分析'}")
+        
+        if idx < len(workflow_rag_results):
+            st.divider()
+elif st.session_state.get('workflow_completed', False):
+    st.info("💡 工作流已完成，但未生成 RAG 分析结果（可能因为无高危评论）")
+
+st.markdown("---")
 
 if analyze_button:
     # 检查 API Key

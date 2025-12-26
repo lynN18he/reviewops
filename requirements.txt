@@ -4,6 +4,7 @@ plotly>=5.18.0
 langchain>=1.0.0
 langchain-community>=0.0.20
 langchain-core>=0.1.0
+langgraph>=0.0.20
 dashscope>=1.10.0
 chromadb>=0.4.0
 pypdf>=3.0.0
