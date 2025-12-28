@@ -27,13 +27,14 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 
 # Pydantic 模型（如果未安装，使用基础字典）
 try:
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ConfigDict
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
     # 创建一个简单的 BaseModel 替代
     class BaseModel:
         pass
+    ConfigDict = None
 
 # ==================== 页面配置 ====================
 st.set_page_config(
@@ -75,15 +76,61 @@ st.markdown("""
         font-weight: 700;
     }
     
-    /* 侧边栏样式 */
+    /* 侧边栏样式 - 优化颜色使其更明显和用户友好 */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0f0a1f 0%, #1a1333 100%);
+        background: linear-gradient(180deg, #1e293b 0%, #334155 100%) !important;
+        border-right: 2px solid rgba(99, 102, 241, 0.3);
     }
     
     [data-testid="stSidebar"] .stMarkdown h1,
     [data-testid="stSidebar"] .stMarkdown h2,
     [data-testid="stSidebar"] .stMarkdown h3 {
-        color: #c4b5fd;
+        color: #e0e7ff !important;
+        font-weight: 600;
+    }
+    
+    [data-testid="stSidebar"] .stMarkdown p,
+    [data-testid="stSidebar"] .stMarkdown {
+        color: #cbd5e1 !important;
+    }
+    
+    [data-testid="stSidebar"] .stInfo {
+        background-color: rgba(99, 102, 241, 0.15) !important;
+        border-left: 3px solid #6366f1 !important;
+        color: #e0e7ff !important;
+    }
+    
+    [data-testid="stSidebar"] .stSuccess {
+        background-color: rgba(16, 185, 129, 0.15) !important;
+        border-left: 3px solid #10b981 !important;
+        color: #d1fae5 !important;
+    }
+    
+    [data-testid="stSidebar"] .stWarning {
+        background-color: rgba(245, 158, 11, 0.15) !important;
+        border-left: 3px solid #f59e0b !important;
+        color: #fef3c7 !important;
+    }
+    
+    [data-testid="stSidebar"] .stCaption {
+        color: #94a3b8 !important;
+    }
+    
+    [data-testid="stSidebar"] .stDivider {
+        border-color: rgba(99, 102, 241, 0.2) !important;
+    }
+    
+    [data-testid="stSidebar"] input[type="text"],
+    [data-testid="stSidebar"] input[type="password"] {
+        background-color: rgba(30, 41, 59, 0.5) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        color: #e0e7ff !important;
+    }
+    
+    [data-testid="stSidebar"] input[type="text"]:focus,
+    [data-testid="stSidebar"] input[type="password"]:focus {
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
     }
     
     /* 按钮样式 */
@@ -234,6 +281,43 @@ st.markdown("""
         height: 1px;
         background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
         margin: 2rem 0;
+    }
+    
+    /* Toast 通知位置调整 - 让弹框更靠近按钮 */
+    [data-testid="stToast"] {
+        position: fixed !important;
+        top: 20px !important;
+        right: 20px !important;
+        z-index: 999999 !important;
+        min-width: 300px !important;
+        max-width: 400px !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+        border-radius: 12px !important;
+        animation: slideInRight 0.3s ease-out !important;
+    }
+    
+    @keyframes slideInRight {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+    
+    /* 确保 toast 内容可见 */
+    [data-testid="stToast"] > div {
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%) !important;
+        color: #e0e7ff !important;
+        padding: 1rem 1.25rem !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+    }
+    
+    [data-testid="stToast"] [data-baseweb="notification"] {
+        background: transparent !important;
+        color: #e0e7ff !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -400,10 +484,45 @@ def extract_product_name():
 
 
 def calculate_metrics(df):
-    """计算关键指标"""
+    """计算关键指标 - 确保所有评论（包括正面和负面）都被正确统计"""
+    # 处理空 DataFrame
+    if df.empty or len(df) == 0:
+        return 0, 0.0, 0.0
+    
     total_reviews = len(df)
-    avg_rating = df['rating'].mean()
-    negative_ratio = len(df[df['rating'] < 3]) / total_reviews * 100
+    
+    # 计算平均评分，处理 NaN 值
+    # 重要：必须计算所有评论的平均分，包括正面、负面和中性评论
+    if 'rating' not in df.columns:
+        avg_rating = 0.0
+    else:
+        # 确保 rating 是数值类型
+        rating_series = pd.to_numeric(df['rating'], errors='coerce')
+        # 过滤掉 NaN 值后计算平均值（包括所有有效评分）
+        valid_ratings = rating_series.dropna()
+        if len(valid_ratings) > 0:
+            # 计算所有有效评分的平均值（包括 1-5 星的所有评分）
+            avg_rating = float(valid_ratings.mean())
+        else:
+            avg_rating = 0.0
+    
+    # 计算负面评价占比，处理除零情况
+    # 重要：负面评价占比 = 负面评论数 / 总评论数 * 100
+    # 总评论数包括所有评论（正面、负面、中性）
+    if total_reviews == 0:
+        negative_ratio = 0.0
+    else:
+        if 'rating' in df.columns:
+            # 确保 rating 是数值类型后再比较
+            rating_series = pd.to_numeric(df['rating'], errors='coerce')
+            # 负面评价：rating < 3（1星和2星）
+            # 注意：这里只计算负面评论数，分母是总评论数（包括正面评论）
+            negative_count = len(rating_series[rating_series < 3].dropna())
+        else:
+            negative_count = 0
+        # 负面占比 = 负面评论数 / 总评论数 * 100
+        negative_ratio = (negative_count / total_reviews) * 100
+    
     return total_reviews, avg_rating, negative_ratio
 
 
@@ -710,8 +829,18 @@ def match_with_spec(complaint, qa_chain=None):
 
 def generate_ai_brief(df, negative_ratio):
     """生成 AI 每日简报（基于实际用户反馈数据）"""
-    negative_count = len(df[df['rating'] < 3])
-    positive_count = len(df[df['rating'] >= 4])
+    # 确保数据一致性：正面 + 负面 + 中性 = 总数
+    negative_count = len(df[df['rating'] < 3])  # rating < 3: 负面
+    positive_count = len(df[df['rating'] >= 4])  # rating >= 4: 正面
+    neutral_count = len(df[df['rating'] == 3])   # rating == 3: 中性
+    
+    # 验证数据一致性
+    total_calculated = positive_count + negative_count + neutral_count
+    if total_calculated != len(df):
+        # 如果数据不一致，重新计算（处理可能的 NaN 或其他异常值）
+        negative_count = len(df[df['rating'] < 3].dropna())
+        positive_count = len(df[df['rating'] >= 4].dropna())
+        neutral_count = len(df[df['rating'] == 3].dropna())
     
     # 如果已有分析结果，使用它；否则使用通用描述
     if 'analysis_topics' in st.session_state:
@@ -721,13 +850,19 @@ def generate_ai_brief(df, negative_ratio):
     else:
         top_issue_text = "功能使用问题"
     
+    # 构建反馈统计文本（根据是否有中性评价决定显示格式）
+    if neutral_count > 0:
+        feedback_summary = f"本周共收集 **{len(df)}** 条用户反馈，其中正向评价 **{positive_count}** 条，负向评价 **{negative_count}** 条，中性评价 **{neutral_count}** 条"
+    else:
+        feedback_summary = f"本周共收集 **{len(df)}** 条用户反馈，其中正向评价 **{positive_count}** 条，负向评价 **{negative_count}** 条"
+    
     brief = f"""
 ### 📊 舆情趋势分析
 
 **整体情绪：** {"😊 正向为主" if negative_ratio < 30 else "😐 中性偏负" if negative_ratio < 50 else "😟 负向预警"}
 
 **核心发现：**
-- 本周共收集 **{len(df)}** 条用户反馈，其中正向评价 **{positive_count}** 条，负向评价 **{negative_count}** 条
+- {feedback_summary}
 - 用户反馈主要集中在 **产品功能限制说明不清** 和 **实际性能与宣传参数不符** 两大方面
 - 当前最突出的问题类型：{top_issue_text if top_issue_text else "功能使用问题"}
 
@@ -768,11 +903,374 @@ if PYDANTIC_AVAILABLE:
         content: str
         priority: Priority
         
-        class Config:
-            use_enum_values = True
+        model_config = ConfigDict(use_enum_values=True)
 else:
     # 如果没有 Pydantic，使用字典结构
     ActionPlan = dict
+
+
+def render_case_group(rag_result, action_item, batch_idx=0, item_idx=0):
+    """
+    成组渲染单个 Case：包含 RAG 归因分析 + 对应的行动建议
+    采用 Case-Based 布局，形成完整的证据链闭环
+    """
+    review_id = rag_result.get("review_id", f"未知_{item_idx}")
+    review_text = rag_result.get("review_text", "")
+    conclusion = rag_result.get("conclusion", "❓ 需要人工判断")
+    reason = rag_result.get("reason", "")
+    evidence = rag_result.get("evidence", "")
+    
+    # 根据结论类型设置颜色、图标和视觉样式
+    if "产品缺陷" in conclusion or "⚠️" in conclusion or "需进一步调查" in conclusion:
+        # 情况 A：产品缺陷
+        conclusion_type = "产品缺陷"
+        card_style = "error"
+        title_prefix = "🔴 [产品缺陷]"
+        container_func = st.error
+    elif "用户" in conclusion or "❓" in conclusion or "用户使用问题" in conclusion:
+        # 情况 B：用户误解/操作不当
+        conclusion_type = "用户误解"
+        card_style = "warning"
+        title_prefix = "⚠️ [用户误解]"
+        container_func = st.warning
+    elif "✅" in conclusion or "产品已知局限" in conclusion:
+        # 情况 C：产品已知局限
+        conclusion_type = "产品已知局限"
+        card_style = "info"
+        title_prefix = "ℹ️ [产品已知局限]"
+        container_func = st.info
+    else:
+        # 其他情况
+        conclusion_type = "其他问题"
+        card_style = "info"
+        title_prefix = "🔵 [其他问题]"
+        container_func = st.info
+    
+    # 提取问题标题
+    title_keywords = ["续航", "避障", "云台", "抖动", "电池", "图传", "GPS", "虚标", "硬件", "自检"]
+    title = "未知问题"
+    for keyword in title_keywords:
+        if keyword in review_text:
+            title = keyword + "相关问题"
+            break
+    
+    # 生成唯一的 key
+    unique_key = f"case_{batch_idx}_{item_idx}_{review_id}"
+    
+    # 创建完整的 Case 容器（使用 border=True 增强视觉分组）
+    with st.container(border=True):
+        # 1. Header: 风险标题 - 优化显示，避免重复图标
+        st.markdown("")  # 添加顶部间距
+        
+        # 提取图标和文本（title_prefix 已经包含图标，不需要重复显示）
+        # 例如：title_prefix = "🔴 [产品缺陷]" 或 "ℹ️ [产品已知局限]"
+        st.markdown(f"### {title_prefix} {title}")
+        st.caption(f"📋 评论ID: {review_id}")
+        
+        st.markdown("---")  # 添加分隔线，更清晰
+        
+        # 2. Section 1: 归因分析 (Evidence) - 优化布局
+        st.markdown("#### 🔍 归因分析")
+        st.markdown("")  # 添加小间距
+        
+        col_left, col_mid, col_right = st.columns([1, 1, 1])
+        
+        with col_left:
+            st.markdown("**💬 用户原话**")
+            st.markdown("")  # 小间距
+            # 使用更友好的显示方式
+            with st.container():
+                container_func(review_text)
+        
+        with col_mid:
+            st.markdown("**📖 RAG 证据**")
+            st.markdown("")  # 小间距
+            if evidence and evidence not in ["未在说明书中找到相关描述", "向量库未初始化，使用基础分析", ""]:
+                if len(evidence) > 500:
+                    with st.expander("📄 查看完整证据", expanded=False):
+                        st.markdown(evidence)
+                    with st.container():
+                        container_func(evidence[:500] + "...")
+                else:
+                    with st.container():
+                        container_func(evidence)
+            elif evidence == "未在说明书中找到相关描述":
+                st.warning("⚠️ 未在说明书中找到相关描述")
+            else:
+                st.warning("⚠️ 向量检索未启用或失败")
+        
+        with col_right:
+            st.markdown("**🤖 AI 判定**")
+            st.markdown("")  # 小间距
+            with st.container():
+                # 优化结论显示
+                conclusion_text = conclusion.replace("**结论：**", "").strip()
+                container_func(f"**结论：** {conclusion_text}")
+                st.markdown("")  # 小间距
+                # 优化分析显示
+                analysis_text = reason if reason else '暂无详细分析'
+                st.markdown(f"**分析：** {analysis_text}")
+        
+        # 3. Section 2: 决策落地 (Action) - 确保始终显示
+        st.divider()  # 使用分割线清晰区分分析与行动
+        st.markdown("##### 💡 决策落地")
+        
+        if action_item and action_item.get("title"):
+            # 有 action 数据，正常显示
+            action_type = action_item.get("action_type", "Jira Ticket")
+            action_title = action_item.get("title", "")
+            action_content = action_item.get("content", "")
+            priority = action_item.get("priority", "Medium")
+            
+            # 优先级颜色
+            priority_colors = {
+                "High": "🔴",
+                "Medium": "🟡",
+                "Low": "🟢"
+            }
+            priority_icon = priority_colors.get(priority, "🟡")
+            
+            # 行动类型图标
+            type_icons = {
+                "Jira Ticket": "🐞",
+                "Doc Update": "📝",
+                "Email Draft": "📧",
+                "Meeting": "📅"
+            }
+            type_icon = type_icons.get(action_type, "📋")
+            
+            # 显示行动建议信息
+            st.markdown(f"**{type_icon} {action_title}** · {priority_icon} {priority} · {action_type}")
+            
+            # 显示内容
+            if action_content:
+                if len(action_content) > 500:
+                    with st.expander("📄 查看完整内容", expanded=False):
+                        st.markdown(action_content)
+                    st.markdown(action_content[:500] + "...")
+                else:
+                    st.markdown(action_content)
+            else:
+                st.info("📝 行动建议内容生成中...")
+            
+            # Mock 按钮（根据类型使用不同样式）
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                if action_type == "Jira Ticket":
+                    if st.button("🚀 推送至 Jira", key=f"action_jira_{unique_key}", use_container_width=True, type="primary"):
+                        import random
+                        ticket_id = f"DJI-2025-{random.randint(1000, 9999)}"
+                        st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
+                elif action_type == "Doc Update":
+                    if st.button("📝 创建 Notion Task", key=f"action_notion_{unique_key}", use_container_width=True):
+                        st.toast("✅ Notion 任务已创建！", icon="🎉")
+                elif action_type == "Email Draft":
+                    if st.button("📧 复制邮件", key=f"action_email_{unique_key}", use_container_width=True):
+                        st.toast("✅ 邮件内容已复制到剪贴板！", icon="🎉")
+                elif action_type == "Meeting":
+                    if st.button("📅 创建会议", key=f"action_meeting_{unique_key}", use_container_width=True):
+                        st.toast("✅ 会议已创建！", icon="🎉")
+        else:
+            # 没有 action 数据，显示友好的占位符
+            st.warning("⚠️ **暂未生成对应的行动建议**")
+            st.info("💡 系统正在分析中，行动建议将根据归因结果自动生成。")
+            
+            # 提供手动创建按钮
+            with st.expander("🔧 手动创建行动建议", expanded=False):
+                action_type_manual = st.selectbox(
+                    "行动类型",
+                    ["Jira Ticket", "Doc Update", "Email Draft", "Meeting"],
+                    key=f"manual_action_type_{unique_key}"
+                )
+                action_title_manual = st.text_input(
+                    "标题",
+                    value=f"处理 {review_id} 的问题",
+                    key=f"manual_action_title_{unique_key}"
+                )
+                action_content_manual = st.text_area(
+                    "内容",
+                    value=f"用户反馈：{review_text[:200]}...",
+                    height=100,
+                    key=f"manual_action_content_{unique_key}"
+                )
+                if st.button("✅ 创建行动建议", key=f"manual_action_create_{unique_key}"):
+                    st.success("✅ 行动建议已创建（演示模式）")
+                    st.toast("✅ 行动建议已创建！", icon="🎉")
+
+
+def render_rag_card(rag_result, batch_idx=0, item_idx=0):
+    """渲染单个 RAG 归因分析卡片"""
+    review_id = rag_result.get("review_id", f"未知_{item_idx}")
+    review_text = rag_result.get("review_text", "")
+    conclusion = rag_result.get("conclusion", "❓ 需要人工判断")
+    reason = rag_result.get("reason", "")
+    evidence = rag_result.get("evidence", "")
+    
+    # 根据结论类型设置颜色、图标和视觉样式
+    if "产品缺陷" in conclusion or "⚠️" in conclusion or "需进一步调查" in conclusion:
+        # 情况 A：产品缺陷
+        conclusion_type = "产品缺陷"
+        card_style = "error"
+        title_prefix = "🔴 [产品缺陷]"
+    elif "用户" in conclusion or "❓" in conclusion or "用户使用问题" in conclusion:
+        # 情况 B：用户误解/操作不当
+        conclusion_type = "用户误解"
+        card_style = "warning"
+        title_prefix = "⚠️ [用户误解]"
+    elif "✅" in conclusion or "产品已知局限" in conclusion:
+        # 情况 C：产品已知局限
+        conclusion_type = "产品已知局限"
+        card_style = "info"
+        title_prefix = "ℹ️ [产品已知局限]"
+    else:
+        # 其他情况
+        conclusion_type = "其他问题"
+        card_style = "info"
+        title_prefix = "🔵 [其他问题]"
+    
+    # 提取问题标题
+    title_keywords = ["续航", "避障", "云台", "抖动", "电池", "图传", "GPS", "虚标", "硬件", "自检"]
+    title = "未知问题"
+    for keyword in title_keywords:
+        if keyword in review_text:
+            title = keyword + "相关问题"
+            break
+    
+    # 生成唯一的 key（避免不同批次间的 key 冲突）
+    unique_key = f"rag_{batch_idx}_{item_idx}_{review_id}"
+    
+    # 使用不同样式展示卡片
+    if card_style == "error":
+        with st.expander(f"{title_prefix} {title} (ID: {review_id})", expanded=(batch_idx == 0 and item_idx == 0)):
+            col_left, col_mid, col_right = st.columns([1, 1, 1])
+            
+            with col_left:
+                st.markdown("##### 💬 用户原话")
+                st.error(review_text)
+            
+            with col_mid:
+                st.markdown("##### 📖 RAG 证据")
+                if evidence and evidence not in ["未在说明书中找到相关描述", "向量库未初始化，使用基础分析", ""]:
+                    if len(evidence) > 500:
+                        with st.expander("📄 查看完整证据", expanded=False):
+                            st.markdown(evidence)
+                        st.error(evidence[:500] + "...")
+                    else:
+                        st.error(evidence)
+                elif evidence == "未在说明书中找到相关描述":
+                    st.warning("⚠️ 未在说明书中找到相关描述")
+                else:
+                    st.warning("⚠️ 向量检索未启用或失败")
+            
+            with col_right:
+                st.markdown("##### 🤖 AI 判定")
+                st.error(f"**结论：** {conclusion}")
+                st.markdown(f"**分析：** {reason if reason else '暂无详细分析'}")
+    elif card_style == "warning":
+        with st.expander(f"{title_prefix} {title} (ID: {review_id})", expanded=(batch_idx == 0 and item_idx == 0)):
+            col_left, col_mid, col_right = st.columns([1, 1, 1])
+            
+            with col_left:
+                st.markdown("##### 💬 用户原话")
+                st.warning(review_text)
+            
+            with col_mid:
+                st.markdown("##### 📖 RAG 证据")
+                if evidence and evidence not in ["未在说明书中找到相关描述", "向量库未初始化，使用基础分析", ""]:
+                    if len(evidence) > 500:
+                        with st.expander("📄 查看完整证据", expanded=False):
+                            st.markdown(evidence)
+                        st.warning(evidence[:500] + "...")
+                    else:
+                        st.warning(evidence)
+                elif evidence == "未在说明书中找到相关描述":
+                    st.info("ℹ️ 未在说明书中找到相关描述")
+                else:
+                    st.info("ℹ️ 向量检索未启用或失败")
+            
+            with col_right:
+                st.markdown("##### 🤖 AI 判定")
+                st.warning(f"**结论：** {conclusion}")
+                st.markdown(f"**分析：** {reason if reason else '暂无详细分析'}")
+    else:
+        with st.expander(f"{title_prefix} {title} (ID: {review_id})", expanded=(batch_idx == 0 and item_idx == 0)):
+            col_left, col_mid, col_right = st.columns([1, 1, 1])
+            
+            with col_left:
+                st.markdown("##### 💬 用户原话")
+                st.info(review_text)
+            
+            with col_mid:
+                st.markdown("##### 📖 RAG 证据")
+                if evidence and evidence not in ["未在说明书中找到相关描述", "向量库未初始化，使用基础分析", ""]:
+                    if len(evidence) > 500:
+                        with st.expander("📄 查看完整证据", expanded=False):
+                            st.markdown(evidence)
+                        st.info(evidence[:500] + "...")
+                    else:
+                        st.info(evidence)
+                elif evidence == "未在说明书中找到相关描述":
+                    st.info("ℹ️ 未在说明书中找到相关描述")
+                else:
+                    st.info("ℹ️ 向量检索未启用或失败")
+            
+            with col_right:
+                st.markdown("##### 🤖 AI 判定")
+                st.info(f"**结论：** {conclusion}")
+                st.markdown(f"**分析：** {reason if reason else '暂无详细分析'}")
+
+
+def render_action_card(action, batch_idx=0, item_idx=0):
+    """渲染单个行动建议卡片"""
+    action_type = action.get("action_type", "Jira Ticket")
+    title = action.get("title", "")
+    content = action.get("content", "")
+    priority = action.get("priority", "Medium")
+    
+    # 优先级颜色
+    priority_colors = {
+        "High": "🔴",
+        "Medium": "🟡",
+        "Low": "🟢"
+    }
+    priority_icon = priority_colors.get(priority, "🟡")
+    
+    # 行动类型图标
+    type_icons = {
+        "Jira Ticket": "🐞",
+        "Doc Update": "📝",
+        "Email Draft": "📧",
+        "Meeting": "📅"
+    }
+    type_icon = type_icons.get(action_type, "📋")
+    
+    # 生成唯一的 key（用于其他组件的 key，但 st.expander 不支持 key 参数）
+    unique_key = f"action_{batch_idx}_{item_idx}_{action.get('review_id', item_idx)}"
+    
+    with st.expander(f"{type_icon} **{title}** · {priority_icon} {priority} · {action_type}", expanded=(batch_idx == 0 and item_idx <= 1)):
+        st.markdown(f"**优先级：** {priority}")
+        st.markdown(f"**类型：** {action_type}")
+        st.markdown(f"**内容：**")
+        if len(content) > 500:
+            st.text_area("", value=content, height=150, disabled=True, key=f"action_content_{unique_key}", label_visibility="collapsed")
+        else:
+            st.markdown(content)
+        
+        # Mock 按钮（根据类型使用不同样式）
+        if action_type == "Jira Ticket":
+            if st.button("🚀 推送至 Jira", key=f"action_jira_{unique_key}", use_container_width=True, type="primary"):
+                import random
+                ticket_id = f"DJI-2025-{random.randint(1000, 9999)}"
+                st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
+        elif action_type == "Doc Update":
+            if st.button("📝 创建 Notion Task", key=f"action_notion_{unique_key}", use_container_width=True):
+                st.toast("✅ Notion 任务已创建！", icon="🎉")
+        elif action_type == "Email Draft":
+            if st.button("📧 复制邮件", key=f"action_email_{unique_key}", use_container_width=True):
+                st.toast("✅ 邮件内容已复制到剪贴板！", icon="🎉")
+        elif action_type == "Meeting":
+            if st.button("📅 创建会议", key=f"action_meeting_{unique_key}", use_container_width=True):
+                st.toast("✅ 会议已创建！", icon="🎉")
 
 
 def generate_action_plan(topic_name: str, rag_conclusion: str, user_complaints: list, llm) -> Optional[dict]:
@@ -946,570 +1444,603 @@ st.markdown('<h1 class="main-title">ReviewOps</h1>', unsafe_allow_html=True)
 st.markdown("**用户反馈决策中台** · 让产品决策有据可依")
 st.markdown("---")
 
+# ==================== 全局状态初始化 (SSOT) ====================
+# 检查并初始化 all_reviews（Single Source of Truth）
+if 'all_reviews' not in st.session_state:
+    # 初始化：从 CSV 文件加载历史数据
+    st.session_state.all_reviews = reviews_df.to_dict('records')
+    st.session_state.last_run_increment = 0
+    # 初始化指标基准值（用于计算增量）
+    if len(st.session_state.all_reviews) > 0:
+        init_df = pd.DataFrame(st.session_state.all_reviews)
+        if 'rating' in init_df.columns:
+            init_df['rating'] = pd.to_numeric(init_df['rating'], errors='coerce').fillna(0)
+            init_total, init_avg, init_negative = calculate_metrics(init_df)
+            st.session_state['prev_total_reviews'] = init_total
+            st.session_state['prev_avg_rating'] = init_avg
+            st.session_state['prev_negative_ratio'] = init_negative
+        else:
+            st.session_state['prev_total_reviews'] = 0
+            st.session_state['prev_avg_rating'] = 0.0
+            st.session_state['prev_negative_ratio'] = 0.0
+    else:
+        st.session_state['prev_total_reviews'] = 0
+        st.session_state['prev_avg_rating'] = 0.0
+        st.session_state['prev_negative_ratio'] = 0.0
+
+# 初始化 RAG 分析结果存储
+if 'latest_rag_results' not in st.session_state:
+    st.session_state.latest_rag_results = []
+
+# 初始化增量巡检相关状态
+if 'last_run_time' not in st.session_state:
+    st.session_state.last_run_time = None
+if 'incremental_rag_results' not in st.session_state:
+    st.session_state.incremental_rag_results = []  # 存储本次巡检的RAG结果
+
+# 初始化历史巡检记录（实时风险动态流）
+if 'incident_history' not in st.session_state:
+    st.session_state.incident_history = []  # 存储所有历史巡检批次
+
+# 检查是否需要刷新页面以更新数据概览
+if st.session_state.get('need_refresh', False):
+    st.session_state['need_refresh'] = False
+    # 延迟刷新，让用户有时间看清工作流完成提示
+    time.sleep(2)
+    st.rerun()
+
 # ==================== 顶部 Dashboard ====================
-st.markdown("## 📈 数据概览")
+# 使用容器统一模块大小
+with st.container():
+    st.markdown("## 📈 数据概览")
+    
+    # 计算指标 - 基于 session_state.all_reviews（SSOT）
+    all_reviews = st.session_state.get('all_reviews', [])
+    
+    # 确保 all_reviews 是列表且不为空
+    if not all_reviews:
+        all_reviews_df = pd.DataFrame(columns=['rating'])
+    else:
+        # 创建 DataFrame，确保所有评论都被包含
+        all_reviews_df = pd.DataFrame(all_reviews)
+        
+        # 调试：检查数据
+        if len(all_reviews_df) > 0:
+            # 确保 rating 列存在且为数值类型
+            if 'rating' not in all_reviews_df.columns:
+                all_reviews_df['rating'] = 0
+            else:
+                # 确保 rating 是数值类型，处理可能的字符串或其他类型
+                all_reviews_df['rating'] = pd.to_numeric(all_reviews_df['rating'], errors='coerce').fillna(0)
+            
+            # 去重：基于 review_id 去重，避免重复计算
+            if 'review_id' in all_reviews_df.columns:
+                all_reviews_df = all_reviews_df.drop_duplicates(subset=['review_id'], keep='last')
+    
+    # 计算指标（强制重新计算，不使用缓存）
+    # 重要：每次页面渲染时都重新计算，确保使用最新数据
+    total_reviews, avg_rating, negative_ratio = calculate_metrics(all_reviews_df)
+    
+    # 调试：显示实际数据状态（帮助排查问题，可以临时启用）
+    if len(all_reviews_df) > 0 and 'rating' in all_reviews_df.columns:
+        rating_series = pd.to_numeric(all_reviews_df['rating'], errors='coerce').dropna()
+        if len(rating_series) > 0:
+            positive_count = len(rating_series[rating_series >= 4])
+            negative_count = len(rating_series[rating_series < 3])
+            neutral_count = len(rating_series[(rating_series >= 3) & (rating_series < 4)])
+            # 临时调试信息（如果需要可以取消注释）
+            # with st.expander("🔍 数据调试信息", expanded=False):
+            #     st.write(f"总评论数: {total_reviews}")
+            #     st.write(f"正面评论: {positive_count}, 负面评论: {negative_count}, 中性评论: {neutral_count}")
+            #     st.write(f"平均评分: {avg_rating:.2f}")
+            #     st.write(f"负面占比: {negative_ratio:.2f}%")
+            #     st.write(f"评分分布: {rating_series.value_counts().sort_index().to_dict()}")
+    
+    # 获取上次保存的值（用于计算增量）
+    prev_total = st.session_state.get('prev_total_reviews', 0)
+    prev_avg = st.session_state.get('prev_avg_rating', 0.0)
+    prev_negative_ratio = st.session_state.get('prev_negative_ratio', 0.0)
+    
+    # 计算 delta 值（只有当有历史数据且总数变化时才计算）
+    if prev_total > 0 and prev_total != total_reviews:
+        # 总数发生变化，说明有新数据，计算增量
+        avg_delta = avg_rating - prev_avg
+        negative_delta = negative_ratio - prev_negative_ratio
+    elif prev_total == 0:
+        # 首次运行，没有历史数据
+        avg_delta = None
+        negative_delta = None
+    else:
+        # 总数未变化，但可能数据有更新，仍然计算增量
+        avg_delta = avg_rating - prev_avg if prev_avg > 0 else None
+        negative_delta = negative_ratio - prev_negative_ratio if prev_negative_ratio > 0 else None
+    
+    # 保存当前值作为下次的基准（每次都要更新，确保下次计算时使用最新值）
+    # 重要：必须在每次渲染时更新，确保下次计算时使用最新值
+    st.session_state['prev_total_reviews'] = total_reviews
+    st.session_state['prev_avg_rating'] = avg_rating
+    st.session_state['prev_negative_ratio'] = negative_ratio
+    
+    # 三个指标卡片
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # 动态显示增量（基于 last_run_increment）
+        delta_text = f"本次新增 {st.session_state.last_run_increment} 条" if st.session_state.last_run_increment > 0 else None
+        st.metric(
+            label="📝 总评论数",
+            value=f"{total_reviews}",
+            delta=delta_text,
+            delta_color="normal"
+        )
+    
+    with col2:
+        # 显示平均评分，带增量变化
+        delta_text_avg = f"{avg_delta:+.1f}" if avg_delta is not None and abs(avg_delta) > 0.01 else None
+        st.metric(
+            label="⭐ 平均评分",
+            value=f"{avg_rating:.1f}",
+            delta=delta_text_avg,
+            delta_color="normal" if avg_delta is None or avg_delta >= 0 else "inverse"
+        )
+    
+    with col3:
+        # 显示负面评价占比，带增量变化
+        delta_text_negative = f"{negative_delta:+.1f}%" if negative_delta is not None and abs(negative_delta) > 0.01 else None
+        st.metric(
+            label="😔 负面评价占比",
+            value=f"{negative_ratio:.1f}%",
+            delta=delta_text_negative,
+            delta_color="inverse" if negative_delta is None or negative_delta <= 0 else "normal"
+        )
 
-# 计算指标
-total_reviews, avg_rating, negative_ratio = calculate_metrics(reviews_df)
-
-# 三个指标卡片
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric(
-        label="📝 总评论数",
-        value=f"{total_reviews}",
-        delta="本周新增 5 条",
-        delta_color="normal"
-    )
-
-with col2:
-    st.metric(
-        label="⭐ 平均评分",
-        value=f"{avg_rating:.1f}",
-        delta="+0.2 vs 上周",
-        delta_color="normal"
-    )
-
-with col3:
-    st.metric(
-        label="😔 负面评价占比",
-        value=f"{negative_ratio:.1f}%",
-        delta="-5% vs 上周",
-        delta_color="inverse"
-    )
-
-st.markdown("")
-
-# AI 每日简报
-with st.expander("🤖 **AI 每日简报** - 点击展开", expanded=True):
-    ai_brief = generate_ai_brief(reviews_df, negative_ratio)
-    st.markdown(ai_brief)
+# AI 每日简报 - 使用容器统一大小
+with st.container():
+    with st.expander("🤖 **AI 每日简报** - 点击展开", expanded=True):
+        ai_brief = generate_ai_brief(all_reviews_df, negative_ratio)
+        st.markdown(ai_brief)
 
 st.markdown("---")
 
-# ==================== 中间核心区：RAG 分析 ====================
-st.markdown("## 🔍 RAG 归因分析")
-st.caption("基于产品说明书对用户反馈进行智能归因，识别问题根源")
+# ==================== Tab 分页结构 ====================
+# 使用容器统一模块大小
+with st.container():
+    tab_auto, tab_manual = st.tabs(["🛡️ 智能巡检控制台", "🔬 单条归因实验室"])
 
-# 分析按钮
-col_btn, col_space = st.columns([1, 3])
-with col_btn:
-    analyze_button = st.button("🚀 开始归因分析", use_container_width=True)
-
-if analyze_button:
-    # 检查 API Key
-    if not api_key:
-        st.error("❌ 请先在侧边栏配置 DashScope API Key")
-        st.stop()
+# ==================== Tab 1: 智能巡检控制台 ====================
+with tab_auto:
+    st.markdown("### ⚡ 智能工作流")
+    st.caption("基于 LangGraph 的自动化巡检系统，自动监控、筛选、分析和生成行动建议")
     
-    # 初始化 RAG 组件
-    with st.spinner("🔧 正在初始化 RAG 系统..."):
-        vectorstore = init_vectorstore(api_key)
-        llm = init_llm(api_key)
-        
-        if not vectorstore or not llm:
-            st.error("❌ RAG 系统初始化失败，请检查 API Key 和向量库")
+    # 优化按钮布局：左侧按钮，右侧信息
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        workflow_button = st.button("⚡ 运行智能工作流", type="primary", use_container_width=True, key="workflow_btn_auto")
+    with col_info:
+        # 垂直居中显示上次巡检时间，使用灰色小字
+        last_run_time = st.session_state.get('last_run_time', '从未')
+        st.markdown(
+            f"<div style='padding-top: 10px; color: #6b7280; font-size: 0.9rem;'>🕒 上次自动巡检：{last_run_time}</div>",
+            unsafe_allow_html=True
+        )
+    
+    # ==================== 智能工作流执行 ====================
+    # Trigger (按钮部分): 只负责运行 Graph，将结果追加到 st.session_state.incident_history
+    # 之后立刻调用 st.rerun()，不在这里写任何 st.markdown 或 UI 渲染代码！
+    if workflow_button:
+        # 检查 API Key
+        if not api_key:
+            st.error("❌ 请先在侧边栏配置 DashScope API Key")
             st.stop()
         
-        # 存储 RAG 组件到 session_state
-        st.session_state['vectorstore'] = vectorstore
-        st.session_state['llm'] = llm
-    
-    # AI 分析过程
-    with st.spinner("🧠 AI 正在分析中..."):
-        progress_bar = st.progress(0)
-        
-        # Step 1
-        st.toast("📥 正在提取负面评价...")
-        negative_reviews = get_negative_reviews(reviews_df)
-        # 存储负面评论总数，供后续显示使用
-        st.session_state['total_negative_reviews'] = len(negative_reviews)
-        time.sleep(0.3)
-        progress_bar.progress(25)
-        
-        # Step 2: 使用 LLM 进行语义聚类
-        st.toast("🤖 AI 正在分析用户反馈并自动聚类...")
-        topics = analyze_reviews_with_llm(negative_reviews, llm)
-        time.sleep(0.3)
-        progress_bar.progress(50)
-        
-        if not topics:
-            st.error("❌ LLM 分析失败，请检查 API Key 和网络连接")
-            st.stop()
-        
-        # Step 3
-        st.toast("📄 正在匹配产品说明书（RAG 检索）...")
-        # 这里会稍后在显示结果时进行 RAG 分析
-        time.sleep(0.3)
-        progress_bar.progress(75)
-        
-        # Step 4
-        st.toast("💡 正在生成分析结论...")
-        time.sleep(0.3)
-        progress_bar.progress(100)
-    
-    st.success("✅ 分析完成！")
-    
-    # 将 LLM 返回的 topics 转换为聚合格式
-    aggregated_complaints = convert_topics_to_aggregated_format(topics, negative_reviews)
-    
-    # 存储到 session_state 供 Action 部分使用
-    st.session_state['analysis_topics'] = topics
-    st.session_state['analysis_results'] = aggregated_complaints  # 兼容旧代码
-    st.session_state['aggregated_complaints'] = aggregated_complaints
-    
-    # 初始化过滤器状态
-    if 'selected_complaint_filter' not in st.session_state:
-        st.session_state['selected_complaint_filter'] = None
-
-# ===== 显示分析结果（独立于按钮点击，便于过滤后刷新） =====
-if 'aggregated_complaints' in st.session_state:
-    aggregated_complaints = st.session_state['aggregated_complaints']
-    # 兼容旧代码：analysis_results 可能是旧的格式，也可能是新的格式
-    complaints = st.session_state.get('analysis_results', aggregated_complaints)
-    
-    # 问题分布统计 - 移到归因卡片上方，便于交互
-    st.markdown("### 📊 问题分布")
-    st.caption("💡 点击图表扇区可过滤下方的归因卡片")
-    
-    # 构建统计数据 - 按严重程度排序（出现次数从高到低）
-    sorted_complaints = sorted(aggregated_complaints, key=lambda x: x['count'], reverse=True)
-    
-    complaint_counts = pd.DataFrame([
-        {'问题类型': agg['complaint'], '出现次数': agg['count']} 
-        for agg in sorted_complaints
-    ])
-    
-    # 生成渐变颜色（从深红到浅红，表示严重程度）
-    n_issues = len(sorted_complaints)
-    if n_issues == 1:
-        colors = ['#dc2626']  # 深红
-    else:
-        # 从深红到浅橙的渐变
-        color_scale = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fed7aa', '#fef3c7']
-        colors = color_scale[:n_issues] if n_issues <= len(color_scale) else color_scale
-    
-    col_chart, col_insight = st.columns([2, 1])
-    
-    # 获取总负面评论数，用于计算百分比
-    total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
-    
-    with col_chart:
-        # 计算每个问题的百分比（基于总负面评论数，而不是去重后的数量）
-        complaint_counts_with_pct = complaint_counts.copy()
-        complaint_counts_with_pct['百分比'] = (complaint_counts_with_pct['出现次数'] / total_negative_count * 100).round(1)
-        
-        # 计算每个问题的百分比（基于总负面评论数）
-        custom_percentages = []
-        for idx, row in complaint_counts_with_pct.iterrows():
-            pct = row['百分比']
-            custom_percentages.append(pct)
-        
-        # 创建可交互的饼图
-        # 使用 texttemplate 来显示标签和基于总负面评论数的百分比
-        fig = go.Figure(data=[go.Pie(
-            labels=complaint_counts['问题类型'],
-            values=complaint_counts['出现次数'],
-            hole=0.4,  # 甜甜圈样式
-            marker=dict(
-                colors=colors,
-                line=dict(color='#ffffff', width=2)
-            ),
-            texttemplate='%{label}<br>%{text}',  # 自定义文本模板：显示标签和百分比
-            text=[f"{pct:.1f}%" for pct in custom_percentages],  # 显示基于总负面评论数的百分比
-            textposition='outside',
-            textfont=dict(size=12),
-            hovertemplate="<b>%{label}</b><br>出现次数: %{value}<br>占比: %{customdata:.1f}%<extra></extra>",
-            customdata=custom_percentages,  # 传递百分比数据用于 hover
-            pull=[0.05 if i == 0 else 0 for i in range(n_issues)]  # 突出最严重的问题
-        )])
-        
-        fig.update_layout(
-            showlegend=False,
-            margin=dict(t=20, b=20, l=20, r=20),
-            height=300,
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            annotations=[
-                dict(
-                    text=f"<b>{len(sorted_complaints)}</b><br>类负面评论",
-                    x=0.5, y=0.5,
-                    font=dict(size=14, color='#374151'),
-                    showarrow=False
-                )
-            ]
-        )
-        
-        # 显示图表并捕获点击事件
-        selected_point = st.plotly_chart(
-            fig, 
-            use_container_width=True, 
-            key="complaint_pie_chart",
-            on_select="rerun",
-            selection_mode="points"
-        )
-        
-        # 处理点击事件
-        if selected_point and selected_point.selection and selected_point.selection.point_indices:
-            clicked_idx = selected_point.selection.point_indices[0]
-            clicked_complaint = complaint_counts.iloc[clicked_idx]['问题类型']
-            if st.session_state.get('selected_complaint_filter') != clicked_complaint:
-                st.session_state['selected_complaint_filter'] = clicked_complaint
-                st.rerun()
-    
-    with col_insight:
-        st.markdown("**💡 关键洞察**")
-        top_issue = sorted_complaints[0]['complaint']
-        top_count = sorted_complaints[0]['count']
-        
-        # 严重程度指示器 - 使用总负面评论数
-        total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
-        severity_pct = top_count / total_negative_count * 100 if total_negative_count > 0 else 0
-        if severity_pct >= 50:
-            severity_label = "🔴 高度集中"
-            severity_color = "#dc2626"
-        elif severity_pct >= 30:
-            severity_label = "🟡 中度集中"
-            severity_color = "#f59e0b"
-        else:
-            severity_label = "🟢 分散"
-            severity_color = "#10b981"
-        
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #fef2f2 0%, #fff7ed 100%); 
-                    padding: 1rem; border-radius: 10px; border-left: 4px solid {severity_color};">
-            <p style="margin: 0 0 0.5rem 0; color: #6b7280; font-size: 0.85rem;">最突出问题</p>
-            <p style="margin: 0 0 0.5rem 0; font-weight: 600; color: #1f2937;">{top_issue}</p>
-            <p style="margin: 0; color: #374151;">
-                出现 <strong>{top_count}</strong> 次 · 占比 <strong>{severity_pct:.0f}%</strong>
-            </p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.85rem;">{severity_label}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # 显示其他问题的简要统计
-        if len(sorted_complaints) > 1:
-            st.markdown("**📋 其他问题**")
-            total_negative_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in sorted_complaints))
-            for agg in sorted_complaints[1:]:
-                pct = agg['count'] / total_negative_count * 100 if total_negative_count > 0 else 0
-                st.markdown(f"- {agg['complaint']}: **{agg['count']}** 次 ({pct:.0f}%)")
-    
-    # 过滤控制
-    current_filter = st.session_state.get('selected_complaint_filter')
-    
-    if current_filter:
-        st.info(f"🔍 当前过滤：**{current_filter}** · [点击清除过滤]")
-        if st.button("✖️ 清除过滤，显示全部", key="clear_filter"):
-            st.session_state['selected_complaint_filter'] = None
+        try:
+            # 导入工作流
+            from agent_graph import graph_app
+            
+            # 记录本次巡检开始时间
+            import datetime
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 初始化状态（增量巡检：保留已处理的ID）
+            initial_state = {
+                "raw_reviews": [],
+                "critical_reviews": [],
+                "rag_analysis_results": [],
+                "action_plans": [],
+                "logs": [],
+                "processed_ids": st.session_state.get('processed_ids', [])  # 保留历史已处理ID
+            }
+            
+            # 清空本次巡检的结果（只保留历史数据）
+            st.session_state.incremental_rag_results = []
+            st.session_state.incremental_action_plans = []
+            
+            # 使用 st.status 展示实时日志（恢复运行过程显示）
+            with st.status("🔄 工作流运行中...", expanded=True) as status:
+                st.write("🚀 启动智能工作流...")
+                
+                # 数据同步：使用 stream() 监听流式输出
+                final_state = initial_state.copy()
+                for event in graph_app.stream(initial_state):
+                    # 遍历每个节点的输出
+                    for node_name, node_output in event.items():
+                        # 合并状态
+                        if isinstance(node_output, dict):
+                            final_state.update(node_output)
+                        
+                        # 检测 node_monitor 产出的 raw_reviews
+                        if node_name == "monitor" and isinstance(node_output, dict) and "raw_reviews" in node_output:
+                            new_reviews = node_output.get("raw_reviews", [])
+                            if new_reviews:
+                                # 数据同步：立即追加到 session_state.all_reviews（增量累加）
+                                st.session_state.all_reviews.extend(new_reviews)
+                                st.session_state.last_run_increment = len(new_reviews)
+                                st.write(f"📥 数据同步：已添加 {len(new_reviews)} 条新评论到全局状态（累计：{len(st.session_state.all_reviews)} 条）")
+                        
+                        # 检测 node_rag_analysis 产出的 rag_analysis_results（本次巡检的新增结果）
+                        if node_name == "rag_analysis" and isinstance(node_output, dict) and "rag_analysis_results" in node_output:
+                            rag_results = node_output.get("rag_analysis_results", [])
+                            if rag_results:
+                                # 保存本次巡检的RAG结果（增量）
+                                st.session_state.incremental_rag_results.extend(rag_results)
+                                # 同时更新全局最新结果（用于兼容性）
+                                st.session_state.latest_rag_results = rag_results
+                                st.write(f"📄 本次巡检发现 {len(rag_results)} 条RAG归因结果（累计：{len(st.session_state.incremental_rag_results)} 条）")
+                        
+                        # 检测 node_action_gen 产出的 action_plans（本次巡检的新增结果）
+                        if node_name == "action_gen" and isinstance(node_output, dict) and "action_plans" in node_output:
+                            action_plans = node_output.get("action_plans", [])
+                            if action_plans:
+                                # 保存本次巡检的行动建议（增量）
+                                st.session_state.incremental_action_plans = action_plans
+                                st.write(f"💡 本次巡检生成 {len(action_plans)} 条行动建议")
+                        
+                        # 更新已处理的ID集合（用于幂等性）
+                        if isinstance(node_output, dict) and "processed_ids" in node_output:
+                            processed_ids = node_output.get("processed_ids", [])
+                            if processed_ids:
+                                existing_ids = set(st.session_state.get('processed_ids', []))
+                                new_ids = set(processed_ids)
+                                st.session_state['processed_ids'] = list(existing_ids | new_ids)
+                        
+                        # 实时显示日志
+                        if isinstance(node_output, dict) and "logs" in node_output:
+                            logs = node_output.get("logs", [])
+                            for log in logs:
+                                st.write(log)
+                                time.sleep(0.2)  # 模拟实时更新
+                
+                status.update(label="✅ 工作流执行完成", state="complete")
+                st.write("⏳ 正在刷新页面以更新统计数据...")
+                time.sleep(1)
+            
+            # 更新上次巡检时间
+            st.session_state.last_run_time = current_time
+            
+            # ==================== 数据处理：保存到历史记录 ====================
+            result = final_state
+            rag_results = result.get("rag_analysis_results", [])
+            action_plans = result.get("action_plans", [])
+            
+            # 生成批次记录，插入到历史记录头部（最新的在最上面）
+            batch_record = {
+                'time': current_time,
+                'rag_results': rag_results,
+                'actions': action_plans,
+                'new_reviews_count': len(final_state.get("raw_reviews", [])),
+                'critical_count': len(result.get("critical_reviews", []))
+            }
+            
+            # 插入到头部（Prepend）
+            st.session_state.incident_history.insert(0, batch_record)
+            
+            # 存储结果到 session_state（用于兼容性）
+            st.session_state['workflow_result'] = result
+            st.session_state['workflow_completed'] = True
+            st.session_state['need_refresh'] = True
+            
+            # 强制清除之前的指标缓存，确保下次计算时使用最新数据
+            # 注意：不清除 prev_* 值，因为需要用于计算 delta
+            # 但确保 all_reviews 已经更新
+            
+            # 立即调用 st.rerun() 触发页面刷新，让渲染区域显示新数据
             st.rerun()
+            
+        except ImportError as e:
+            st.error(f"❌ 无法导入工作流模块: {e}")
+            st.info("💡 请确保 `agent_graph.py` 文件存在且已正确配置")
+        except Exception as e:
+            st.error(f"❌ 工作流执行失败: {e}")
+            st.exception(e)
     
-    # 显示分析结果 - 使用卡片式布局，支持过滤
-    st.markdown("### 📋 归因分析结果")
+    # ==================== 持久化渲染区域：实时风险动态流 ====================
+    incident_history = st.session_state.get('incident_history', [])
     
-    # 根据过滤器筛选要显示的问题
-    display_complaints = aggregated_complaints
-    if current_filter:
-        display_complaints = [agg for agg in aggregated_complaints if agg['complaint'] == current_filter]
-        st.caption(f"已过滤显示 **{len(display_complaints)}** 类问题")
+    if incident_history:
+        st.markdown("---")
+        
+        # ==================== Part A: 最新动态 (Hero Section) ====================
+        latest_batch = incident_history[0]
+        latest_rag_results = latest_batch.get('rag_results', [])
+        latest_actions = latest_batch.get('actions', [])
+        latest_time = latest_batch.get('time', '未知时间')
+        latest_new_reviews = latest_batch.get('new_reviews_count', 0)
+        
+        # 检查是否有 P0 级风险（High 优先级的 Action 或产品缺陷的 RAG）
+        has_p0_risk = False
+        if latest_actions:
+            has_p0_risk = any(action.get('priority') == 'High' for action in latest_actions)
+        if not has_p0_risk and latest_rag_results:
+            has_p0_risk = any('产品缺陷' in rag.get('conclusion', '') for rag in latest_rag_results)
+        
+        # 显示标题和统计
+        col_title, col_stats = st.columns([2, 1])
+        with col_title:
+            st.markdown("### 🚨 本次巡检发现 (Latest)")
+        with col_stats:
+            st.caption(f"📅 {latest_time} · 新增 {latest_new_reviews} 条评论")
+        
+        # 如果有 P0 级风险，使用 st.error 容器包裹增强警示感
+        if has_p0_risk:
+            st.error("⚠️ **检测到高风险问题，请立即处理！**")
+        
+        # Case-Based 成组渲染：通过 review_id 匹配 RAG 和 Action
+        if latest_rag_results:
+            # 创建 action 字典，以 review_id 为 key，方便查找
+            # 支持完整匹配和部分匹配（处理可能的 ID 格式差异）
+            action_dict = {}
+            for action in latest_actions:
+                review_id = action.get('review_id')
+                if review_id:
+                    action_dict[review_id] = action
+                    # 也支持 base_id 匹配（如果 review_id 包含下划线）
+                    if '_' in str(review_id):
+                        base_id = str(review_id).split('_')[0]
+                        if base_id not in action_dict:
+                            action_dict[base_id] = action
+            
+            for item_idx, rag_result in enumerate(latest_rag_results):
+                # 通过 review_id 匹配对应的 Action
+                review_id = rag_result.get("review_id")
+                action_item = None
+                
+                if review_id:
+                    # 优先完整匹配
+                    action_item = action_dict.get(review_id)
+                    # 如果完整匹配失败，尝试 base_id 匹配
+                    if not action_item and '_' in str(review_id):
+                        base_id = str(review_id).split('_')[0]
+                        action_item = action_dict.get(base_id)
+                
+                # 如果还是没匹配到，尝试按索引匹配（兜底方案）
+                if not action_item and item_idx < len(latest_actions):
+                    action_item = latest_actions[item_idx]
+                
+                # 渲染完整的 Case（RAG + Action 成对）
+                render_case_group(rag_result, action_item, batch_idx=0, item_idx=item_idx)
+                # Case 之间的分隔
+                if item_idx < len(latest_rag_results) - 1:
+                    st.markdown("")  # 空白间隔，避免文字粘连
+        
+        # ==================== Part B: 历史回溯 (Scrollable Container) ====================
+        history_batches = incident_history[1:] if len(incident_history) > 1 else []
+        
+        if history_batches:
+            st.divider()  # 分割线，清晰区分最新和历史
+            st.markdown("#### 📜 历史巡检记录")
+            
+            # 使用固定高度的滚动容器
+            with st.container(height=500, border=False):
+                for batch_idx, batch in enumerate(history_batches, start=1):
+                    batch_time = batch.get('time', '未知时间')
+                    rag_results = batch.get('rag_results', [])
+                    actions = batch.get('actions', [])
+                    new_reviews_count = batch.get('new_reviews_count', 0)
+                    
+                    # 使用 expander 折叠历史批次
+                    with st.expander(f"📅 巡检批次: {batch_time} (新增 {new_reviews_count} 条评论)", expanded=False):
+                        # Case-Based 成组渲染：通过 review_id 匹配 RAG 和 Action
+                        if rag_results:
+                            # 创建 action 字典，以 review_id 为 key，方便查找
+                            # 支持完整匹配和部分匹配（处理可能的 ID 格式差异）
+                            action_dict = {}
+                            for action in actions:
+                                review_id = action.get('review_id')
+                                if review_id:
+                                    action_dict[review_id] = action
+                                    # 也支持 base_id 匹配（如果 review_id 包含下划线）
+                                    if '_' in str(review_id):
+                                        base_id = str(review_id).split('_')[0]
+                                        if base_id not in action_dict:
+                                            action_dict[base_id] = action
+                            
+                            for item_idx, rag_result in enumerate(rag_results):
+                                # 通过 review_id 匹配对应的 Action
+                                review_id = rag_result.get("review_id")
+                                action_item = None
+                                
+                                if review_id:
+                                    # 优先完整匹配
+                                    action_item = action_dict.get(review_id)
+                                    # 如果完整匹配失败，尝试 base_id 匹配
+                                    if not action_item and '_' in str(review_id):
+                                        base_id = str(review_id).split('_')[0]
+                                        action_item = action_dict.get(base_id)
+                                
+                                # 如果还是没匹配到，尝试按索引匹配（兜底方案）
+                                if not action_item and item_idx < len(actions):
+                                    action_item = actions[item_idx]
+                                
+                                # 渲染完整的 Case（RAG + Action 成对）
+                                render_case_group(rag_result, action_item, batch_idx=batch_idx, item_idx=item_idx)
+                                # Case 之间的分隔
+                                if item_idx < len(rag_results) - 1:
+                                    st.markdown("")  # 空白间隔，避免文字粘连
+                        
+                        # 批次之间的分隔
+                        if batch_idx < len(history_batches):
+                            st.markdown("")
     else:
-        # 使用实际的负面评论总数
-        total_review_count = st.session_state.get('total_negative_reviews', sum(agg['count'] for agg in aggregated_complaints))
-        st.caption(f"共识别出 **{len(aggregated_complaints)}** 类问题，涉及 **{total_review_count}** 条负面评价")
-    
-    # 获取 RAG 组件（如果已初始化）
-    vectorstore = st.session_state.get('vectorstore', None)
-    llm = st.session_state.get('llm', None)
-    qa_chain = {'vectorstore': vectorstore, 'llm': llm} if vectorstore and llm else None
-    
-    for idx, agg in enumerate(display_complaints):
-        # 使用 RAG 进行真实分析（从向量库中检索）
-        # 优先使用 summary，如果没有则使用 complaint
-        query_text = agg.get('summary', agg['complaint'])
-        if not query_text:
-            query_text = agg['complaint']
-        
-        spec_match, conclusion, source_docs = match_with_spec(
-            query_text, 
-            qa_chain=qa_chain
-        )
-        
-        # 提取结论的简短版本用于标题
-        conclusion_short = conclusion.split(' - ')[0] if ' - ' in conclusion else (conclusion[:30] + "..." if len(conclusion) > 30 else conclusion)
-        
-        # 使用 expander 展示每个问题类型的详情（默认展开前3个或过滤后的全部）
-        with st.expander(
-            f"**{agg['complaint']}** · 出现 {agg['count']} 次 · {conclusion_short}",
-            expanded=(idx < 3 or current_filter is not None)  # 默认展开前3个，过滤后全部展开
-        ):
-            col_left, col_right = st.columns([1, 1])
-            
-            with col_left:
-                st.markdown("##### 🗣️ 用户抱怨点")
-                st.markdown(f"**{agg['complaint']}**")
-                st.markdown(f"📊 出现次数：**{agg['count']}** 次")
-                
-                # 如果有 summary，显示 AI 生成的摘要
-                if agg.get('summary'):
-                    st.markdown("##### 🤖 AI 摘要")
-                    st.info(agg['summary'])
-                
-                st.markdown("##### 💬 典型用户反馈")
-                # 显示所有评论，使用可滚动的方式
-                if len(agg['reviews']) <= 5:
-                    # 如果评论不多，全部显示
-                    for i, review in enumerate(agg['reviews'], 1):
-                        st.markdown(f"**反馈 {i}:**")
-                        st.markdown(f"> *\"{review}\"*")
-                        if i < len(agg['reviews']):
-                            st.markdown("")  # 添加间距
-                else:
-                    # 如果评论较多，显示前5条，其余在expander中
-                    for i, review in enumerate(agg['reviews'][:5], 1):
-                        st.markdown(f"**反馈 {i}:**")
-                        st.markdown(f"> *\"{review}\"*")
-                        if i < 5:
-                            st.markdown("")  # 添加间距
-                    
-                    with st.expander(f"📋 查看全部 {len(agg['reviews'])} 条反馈", expanded=False):
-                        for i, review in enumerate(agg['reviews'][5:], 6):
-                            st.markdown(f"**反馈 {i}:**")
-                            st.markdown(f"> *\"{review}\"*")
-                            if i < len(agg['reviews']):
-                                st.markdown("")
-            
-            with col_right:
-                st.markdown("##### 📖 说明书对应参数")
-                # 使用 text_area 或 markdown 来显示完整内容，而不是 st.info（可能截断）
-                if len(spec_match) > 500:
-                    # 如果内容很长，使用 expander 或 text_area
-                    with st.expander("📄 查看完整说明书内容", expanded=True):
-                        st.markdown(spec_match)
-                    st.caption("💡 点击上方展开查看完整内容")
-                else:
-                    # 内容较短，直接显示
-                    st.markdown(f"<div style='background-color: #f0f9ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #0ea5e9;'>{spec_match}</div>", unsafe_allow_html=True)
-                
-                # 如果有源文档，显示证据来源（显示所有相关证据，不限制数量）
-                if source_docs:
-                    st.markdown("")
-                    with st.expander(f"📚 检索到的证据来源 ({len(source_docs)} 条)", expanded=False):
-                        for i, doc in enumerate(source_docs, 1):
-                            st.markdown(f"**证据 {i}:**")
-                            # 使用 text_area 显示完整内容，支持滚动
-                            st.text_area(
-                                label="",
-                                value=doc,
-                                height=150,
-                                key=f"source_doc_{idx}_{i}",
-                                disabled=True,
-                                label_visibility="collapsed"
-                            )
-                            if i < len(source_docs):
-                                st.markdown("---")
-                
-                st.markdown("##### 🤖 AI 判定结论")
-                # 确保结论完整显示
-                if "✅" in conclusion:
-                    st.success(conclusion)
-                elif "⚠️" in conclusion:
-                    st.warning(conclusion)
-                elif "❓" in conclusion:
-                    st.info(conclusion)
-                else:
-                    st.info(conclusion)
+        # 如果工作流未运行，显示提示
+        st.info("👆 点击上方「运行智能工作流」按钮，开始首次增量巡检")
 
-st.markdown("---")
-
-# ==================== 底部 Action 区 ====================
-st.markdown("## 🎯 行动建议")
-st.caption("基于 RAG 分析结果动态生成的可执行行动项 · 点击按钮立即执行")
-
-if 'aggregated_complaints' in st.session_state and 'llm' in st.session_state:
-    aggregated_complaints = st.session_state['aggregated_complaints']
-    llm = st.session_state['llm']
-    vectorstore = st.session_state.get('vectorstore', None)
-    qa_chain = {'vectorstore': vectorstore, 'llm': llm} if vectorstore and llm else None
+# ==================== Tab 2: 单条归因实验室 ====================
+with tab_manual:
+    st.markdown("### 🔬 单条评论归因分析")
+    st.caption("输入单条用户评论，进行深度 RAG 归因分析")
     
-    # 为每个问题聚类生成 Action Plan
-    if 'action_plans' not in st.session_state:
-        st.session_state['action_plans'] = {}
-    
-    # 先为所有问题生成 Action Plan（如果还没有生成）
-    if 'action_plans_generated' not in st.session_state:
-        st.session_state['action_plans_generated'] = True
-        with st.spinner("🤖 正在为所有问题生成行动计划..."):
-            for idx, agg in enumerate(aggregated_complaints):
-                topic_name = agg['complaint']
-                action_key = f"action_plan_{idx}"
-                
-                if action_key not in st.session_state['action_plans']:
-                    # 获取 RAG 结论
-                    query_text = agg.get('summary', topic_name)
-                    spec_match, conclusion, source_docs = match_with_spec(query_text, qa_chain=qa_chain)
-                    
-                    # 生成 Action Plan
-                    action_plan = generate_action_plan(
-                        topic_name=topic_name,
-                        rag_conclusion=conclusion,
-                        user_complaints=agg.get('reviews', [])[:5],
-                        llm=llm
-                    )
-                    
-                    if action_plan:
-                        st.session_state['action_plans'][action_key] = action_plan
-    
-    # 收集所有已生成的 Action Plans，并按优先级排序
-    action_plans_with_complaints = []
-    for idx, agg in enumerate(aggregated_complaints):
-        action_key = f"action_plan_{idx}"
-        action_plan = st.session_state['action_plans'].get(action_key)
-        if action_plan:
-            priority = action_plan.get('priority', 'Medium')
-            # 优先级映射：High=3, Medium=2, Low=1
-            priority_score = {'High': 3, 'Medium': 2, 'Low': 1}.get(priority, 2)
-            action_plans_with_complaints.append({
-                'complaint': agg,
-                'action_plan': action_plan,
-                'priority_score': priority_score,
-                'action_key': action_key
-            })
-    
-    # 按优先级从高到低排序（High > Medium > Low），相同优先级按出现次数排序
-    action_plans_with_complaints.sort(
-        key=lambda x: (x['priority_score'], x['complaint']['count']), 
-        reverse=True
+    # 单条评论输入
+    user_input = st.text_area(
+        "📝 请输入用户评论",
+        placeholder="例如：夜间飞行时避障功能完全失效，差点撞墙...",
+        height=100,
+        key="manual_review_input"
     )
     
-    # 显示前 5 个
-    top_actions = action_plans_with_complaints[:5]
+    analyze_button = st.button("🚀 开始归因分析", use_container_width=True, key="analyze_btn_manual")
     
-    for item in top_actions:
-        agg = item['complaint']
-        action_plan = item['action_plan']
-        action_key = item['action_key']
-        topic_name = agg['complaint']
+    if analyze_button:
+        # 检查输入
+        if not user_input or not user_input.strip():
+            st.warning("⚠️ 请输入用户评论")
+            st.stop()
         
-        # 确定优先级样式
-        priority = action_plan.get('priority', 'Medium')
-        if priority == 'High':
-            badge_class = "high"
-            badge_text = "高优先级"
-            badge_icon = "🔴"
-            badge_color = "#dc2626"
-            badge_bg = "#fef2f2"
-        elif priority == 'Low':
-            badge_class = "low"
-            badge_text = "低优先级"
-            badge_icon = "🟢"
-            badge_color = "#059669"
-            badge_bg = "#ecfdf5"
-        else:
-            badge_class = "medium"
-            badge_text = "中优先级"
-            badge_icon = "🟡"
-            badge_color = "#d97706"
-            badge_bg = "#fffbeb"
+        # 检查 API Key
+        if not api_key:
+            st.error("❌ 请先在侧边栏配置 DashScope API Key")
+            st.stop()
         
-        # 使用 container 创建卡片
-        with st.container():
-            # 卡片头部：优先级标签和问题类型
-            col_badge, col_topic = st.columns([1, 3])
-            with col_badge:
-                st.markdown(f'<span style="background:{badge_bg};color:{badge_color};padding:4px 12px;border-radius:20px;font-size:0.8rem;font-weight:600;">{badge_icon} {badge_text}</span>', unsafe_allow_html=True)
-            with col_topic:
-                st.caption(f"📌 问题类型：{topic_name} · 涉及 {agg['count']} 条反馈")
+        # 初始化 RAG 组件
+        with st.spinner("🔧 正在初始化 RAG 系统..."):
+            vectorstore = init_vectorstore(api_key)
+            llm = init_llm(api_key)
             
-            # 卡片标题
-            st.markdown(f"#### {action_plan.get('title', '行动计划')}")
+            if not vectorstore or not llm:
+                st.error("❌ RAG 系统初始化失败，请检查 API Key 和向量库")
+                st.stop()
+        
+        # 执行 RAG 分析
+        with st.spinner("🧠 AI 正在分析中..."):
+            spec_match, conclusion, source_docs = match_with_spec(
+                user_input,
+                qa_chain={'vectorstore': vectorstore, 'llm': llm}
+            )
+        
+        st.success("✅ 分析完成！")
+        
+        # 显示分析结果
+        st.markdown("---")
+        st.markdown("### 📊 分析结果")
+        
+        col_left, col_right = st.columns([1, 1])
+        
+        with col_left:
+            st.markdown("##### 💬 用户评论")
+            st.info(user_input)
             
-            # 卡片内容区
-            col_content, col_action = st.columns([3, 1])
+            st.markdown("##### 🤖 AI 判定结论")
+            if "✅" in conclusion:
+                st.success(conclusion)
+            elif "⚠️" in conclusion:
+                st.warning(conclusion)
+            elif "❓" in conclusion:
+                st.info(conclusion)
+            else:
+                st.info(conclusion)
+        
+        with col_right:
+            st.markdown("##### 📖 说明书对应参数")
+            if len(spec_match) > 500:
+                with st.expander("📄 查看完整说明书内容", expanded=True):
+                    st.markdown(spec_match)
+            else:
+                st.markdown(f"<div style='background-color: #f0f9ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #0ea5e9;'>{spec_match}</div>", unsafe_allow_html=True)
             
-            with col_content:
-                # 显示 Action Type
-                action_type = action_plan.get('action_type', 'Doc Update')
-                type_icons = {
-                    'Jira Ticket': '🐞',
-                    'Doc Update': '📝',
-                    'Email Draft': '📧',
-                    'Meeting': '📅'
-                }
-                type_icon = type_icons.get(action_type, '📋')
-                st.markdown(f"**{type_icon} 行动类型：** {action_type}")
-                
-                # 显示内容（长内容只显示在 expander 中，不显示预览）
-                content = action_plan.get('content', '')
-                if len(content) > 300:
-                    # 长内容：只显示 expander，不显示预览
-                    with st.expander("📄 查看完整内容", expanded=False):
-                        st.markdown(f"<div style='background-color: #f9fafb; padding: 1rem; border-radius: 8px; border-left: 4px solid #6366f1;'>{content}</div>", unsafe_allow_html=True)
+            # 显示证据来源
+            if source_docs:
+                st.markdown("")
+                with st.expander(f"📚 检索到的证据来源 ({len(source_docs)} 条)", expanded=False):
+                    for i, doc in enumerate(source_docs, 1):
+                        st.markdown(f"**证据 {i}:**")
+                        st.text_area(
+                            label="",
+                            value=doc,
+                            height=150,
+                            key=f"manual_source_doc_{i}",
+                            disabled=True,
+                            label_visibility="collapsed"
+                        )
+                        if i < len(source_docs):
+                            st.markdown("---")
+        
+        # 生成单条评论的 Action Plan
+        st.markdown("---")
+        st.markdown("### 💡 行动建议")
+        
+        action_plan = generate_action_plan(
+            topic_name="单条评论分析",
+            rag_conclusion=conclusion,
+            user_complaints=[user_input],
+            llm=llm
+        )
+        
+        if action_plan:
+            action_type = action_plan.get('action_type', 'Doc Update')
+            title = action_plan.get('title', '')
+            content = action_plan.get('content', '')
+            priority = action_plan.get('priority', 'Medium')
+            
+            # 优先级颜色
+            priority_colors = {
+                "High": "🔴",
+                "Medium": "🟡",
+                "Low": "🟢"
+            }
+            priority_icon = priority_colors.get(priority, "🟡")
+            
+            # 行动类型图标
+            type_icons = {
+                "Jira Ticket": "🐞",
+                "Doc Update": "📝",
+                "Email Draft": "📧",
+                "Meeting": "📅"
+            }
+            type_icon = type_icons.get(action_type, "📋")
+            
+            with st.expander(f"{type_icon} **{title}** · {priority_icon} {priority} · {action_type}", expanded=True):
+                st.markdown(f"**优先级：** {priority}")
+                st.markdown(f"**类型：** {action_type}")
+                st.markdown(f"**内容：**")
+                if len(content) > 500:
+                    st.text_area("", value=content, height=150, disabled=True, key="manual_action_content", label_visibility="collapsed")
                 else:
-                    # 短内容：直接显示
-                    st.markdown(f"<div style='background-color: #f9fafb; padding: 1rem; border-radius: 8px; border-left: 4px solid #6366f1;'>{content}</div>", unsafe_allow_html=True)
-            
-            with col_action:
-                # 根据 Action Type 显示不同的按钮
-                action_type = action_plan.get('action_type', 'Doc Update')
-                button_key = f"btn_{action_key}"
+                    st.markdown(content)
                 
-                if action_type == 'Jira Ticket':
-                    if st.button("🚀 推送至 Jira", key=button_key, use_container_width=True):
-                        # 立即显示 toast，减少延迟
+                # Mock 按钮
+                if action_type == "Jira Ticket":
+                    if st.button("🚀 推送至 Jira", key="manual_jira", use_container_width=True):
                         import random
                         ticket_id = f"DJI-2025-{random.randint(800, 999)}"
                         st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
-                        st.session_state[f'{button_key}_triggered'] = True
-                        st.rerun()
-                        
-                elif action_type == 'Doc Update':
-                    if st.button("📝 创建 Notion Task", key=button_key, use_container_width=True):
-                        st.toast("✅ Notion 任务已创建！", icon="📝")
-                        st.session_state[f'{button_key}_triggered'] = True
-                        st.rerun()
-                        
-                elif action_type == 'Email Draft':
-                    if st.button("📧 复制邮件", key=button_key, use_container_width=True):
-                        st.toast("✅ 邮件内容已复制到剪贴板！", icon="📧")
-                        st.session_state[f'{button_key}_triggered'] = True
-                        st.rerun()
-                        
-                elif action_type == 'Meeting':
-                    if st.button("📅 创建会议", key=button_key, use_container_width=True):
-                        st.toast("✅ 会议邀请已发送！", icon="📅")
-                        st.session_state[f'{button_key}_triggered'] = True
-                        st.rerun()
-                
-                # 显示触发后的详细信息
-                if st.session_state.get(f'{button_key}_triggered', False):
-                    st.markdown("")
-                    if action_type == 'Jira Ticket':
-                        st.success(f"✅ 工单已成功创建并指派给相关团队")
-                        with st.expander("🐞 工单详情", expanded=True):
-                            st.markdown(f"""
-| 字段 | 值 |
-|------|-----|
-| **工单标题** | {action_plan.get('title', 'N/A')} |
-| **类型** | Bug / 功能增强 |
-| **优先级** | {priority} |
-| **描述** | {content[:200]}... |
-                            """)
-                    elif action_type == 'Email Draft':
-                        st.success("✅ 邮件内容已复制到剪贴板")
-                        with st.expander("📧 邮件内容预览", expanded=True):
-                            st.markdown(content)
-                    elif action_type == 'Meeting':
-                        st.success("✅ 会议邀请已发送")
-                        with st.expander("📅 会议详情", expanded=True):
-                            st.markdown(content)
-            
-            st.divider()
+                elif action_type == "Doc Update":
+                    if st.button("📝 创建 Notion Task", key="manual_notion", use_container_width=True):
+                        st.toast("✅ Notion 任务已创建！", icon="🎉")
+                elif action_type == "Email Draft":
+                    if st.button("📧 复制邮件", key="manual_email", use_container_width=True):
+                        st.toast("✅ 邮件内容已复制到剪贴板！", icon="🎉")
+                elif action_type == "Meeting":
+                    if st.button("📅 创建会议", key="manual_meeting", use_container_width=True):
+                        st.toast("✅ 会议已创建！", icon="🎉")
+    else:
+        st.info("👆 请输入用户评论并点击「开始归因分析」按钮")
 
-elif 'aggregated_complaints' in st.session_state:
-    st.info("👆 请先点击上方「开始归因分析」按钮，AI 将基于分析结果生成针对性的行动建议。")
-else:
-    st.info("👆 请先点击上方「开始归因分析」按钮，AI 将基于分析结果生成针对性的行动建议。")
+# ===== 保留原有的批量分析功能（用于兼容性，但不在 Tab 中显示） =====
+# 注意：这部分代码保留在全局，但不会在 UI 中显示，仅用于内部状态管理
+# 已禁用的代码块（已移到 Tab 中）
+# 注意：批量分析功能已移除，现在只在 Tab 中提供单条评论分析功能
+
+# ==================== 清理：删除全局重复的 Action 区 ====================
+# 注意：Action 建议现在只在各自的 Tab 中显示，不再在全局显示
 
 # ==================== 页脚 ====================
 st.markdown("---")
