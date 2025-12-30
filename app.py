@@ -1748,7 +1748,7 @@ with tab_auto:
             
         except ImportError as e:
             st.error(f"❌ 无法导入工作流模块: {e}")
-            st.info("💡 请确保 `agent_graph.py` 文件存在且已正确配置")
+            st.info("💡 请确保 `src/graph.py` 文件存在且已正确配置")
         except Exception as e:
             st.error(f"❌ 工作流执行失败: {e}")
             st.exception(e)
