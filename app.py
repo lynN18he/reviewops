@@ -1635,7 +1635,7 @@ with tab_auto:
         
         try:
             # 导入工作流
-            from agent_graph import graph_app
+            from src.graph import graph_app
             
             # 记录本次巡检开始时间
             import datetime
