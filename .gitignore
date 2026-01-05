@@ -39,3 +39,6 @@ Thumbs.db
 *.tmp
 *.temp
 
+# LangGraph Studio runtime files (auto-generated, should not be committed)
+.langgraph_api/
+
