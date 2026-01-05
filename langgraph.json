@@ -1,0 +1,7 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+      "reviewops_agent": "./src/graph.py:graph_app"
+    },
+    "env": ".env"
+  }
