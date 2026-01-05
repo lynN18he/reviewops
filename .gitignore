@@ -39,3 +39,6 @@ Thumbs.db
 *.tmp
 *.temp
 
+# LangGraph Studio runtime files
+.langgraph_api/
+
