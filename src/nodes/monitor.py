@@ -6,6 +6,7 @@ import time
 import random
 from src.state import ReviewState
 from src.config import MonitorConfig
+from src.services.database import get_database
 
 
 # ==================== Mock 数据池 ====================
@@ -93,15 +94,17 @@ def node_monitor(state: ReviewState) -> ReviewState:
     """
     节点 1: 监控新评论
     动态模拟生成器：从 MOCK_DATA_POOL 随机采样，并添加微秒级时间戳确保唯一性
-    实现幂等性：检查已处理的ID，避免重复处理
+    实现增量模拟：检查数据库，只有不存在的数据才入库
     
     测试优化：确保每次增量 >= 2 条评论，其中至少 1 条为正面评论
     """
-    # 获取已处理的ID集合（用于去重）
+    # 获取数据库管理器
+    db = get_database()
+    
+    # 获取已处理的ID集合（用于内存去重，作为额外保障）
     processed_ids = set(state.get("processed_ids", []))
     
     # 使用微秒级时间戳（time.time_ns()）确保每次运行生成的ID绝对唯一
-    # 这样可以绕过后续节点的去重逻辑，保证演示时每次点击必有新结果
     current_timestamp_ns = time.time_ns()  # 纳秒级时间戳，确保唯一性
     new_reviews = []
     new_processed_ids = []
@@ -113,11 +116,26 @@ def node_monitor(state: ReviewState) -> ReviewState:
         unique_suffix = f"{current_timestamp_ns}_{random.randint(1000, 9999)}"
         review_id = f"{positive_template['base_id']}_{unique_suffix}"
         
-        if review_id not in processed_ids:
+        # 检查数据库：只有不存在的数据才处理
+        if not db.exists(review_id) and review_id not in processed_ids:
+            # 准备评论数据
+            review_data = {
+                "review_id": review_id,
+                "content": positive_template['review_text'],
+                "source": "mock",
+                "rating": positive_template['rating'],
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "risk_level": None  # 初始时风险等级未知，后续由 Filter 节点确定
+            }
+            
+            # 入库
+            db.add_review(review_data)
+            
+            # 构建返回给 Graph 的 review 对象
             review = {
                 "review_id": review_id,
                 "user_id": positive_template['user_id'],
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "timestamp": review_data["timestamp"],
                 "review_text": positive_template['review_text'],
                 "rating": positive_template['rating']
             }
@@ -137,14 +155,28 @@ def node_monitor(state: ReviewState) -> ReviewState:
             unique_suffix = f"{current_timestamp_ns}_{random.randint(1000, 9999)}"
             review_id = f"{template['base_id']}_{unique_suffix}"
             
-            # 幂等性检查：如果ID已处理，跳过
-            if review_id in processed_ids:
+            # 检查数据库：只有不存在的数据才处理
+            if db.exists(review_id) or review_id in processed_ids:
                 continue
             
+            # 准备评论数据
+            review_data = {
+                "review_id": review_id,
+                "content": template['review_text'],
+                "source": "mock",
+                "rating": template['rating'],
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "risk_level": None  # 初始时风险等级未知，后续由 Filter 节点确定
+            }
+            
+            # 入库
+            db.add_review(review_data)
+            
+            # 构建返回给 Graph 的 review 对象
             review = {
                 "review_id": review_id,
                 "user_id": template['user_id'],
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "timestamp": review_data["timestamp"],
                 "review_text": template['review_text'],
                 "rating": template['rating']
             }
@@ -160,6 +192,7 @@ def node_monitor(state: ReviewState) -> ReviewState:
     log_message += f" (正面: {positive_count} 条, 负面: {negative_count} 条, 中性: {neutral_count} 条)"
     if new_reviews:
         log_message += f" | ID: {[r['review_id'] for r in new_reviews]}"
+        log_message += f" | ✅ 已入库 {len(new_reviews)} 条新评论"
     
     return {
         "raw_reviews": new_reviews,

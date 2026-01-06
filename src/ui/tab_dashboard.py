@@ -7,8 +7,10 @@ import streamlit as st
 import pandas as pd
 import time
 import datetime
+from collections import defaultdict
 from src.ui.cards import render_incident_card
 from src.graph import graph_app
+from src.services.database import get_database
 
 
 def render_dashboard_metrics(calculate_metrics, generate_ai_brief):
@@ -228,18 +230,21 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
             # 更新上次巡检时间
             st.session_state.last_run_time = current_time
             
-            # ==================== 数据处理：保存到历史记录 ====================
+            # ==================== 数据处理：保存到 session_state（用于 Hero Section） ====================
+            # 注意：数据库保存已在 monitor 和 action 节点中完成，这里只更新 session_state
             result = final_state
             rag_results = result.get("rag_analysis_results", [])
             action_plans = result.get("action_plans", [])
+            raw_reviews = result.get("raw_reviews", [])
+            critical_reviews = result.get("critical_reviews", [])
             
-            # 生成批次记录，插入到历史记录头部（最新的在最上面）
+            # 生成批次记录（用于 session_state，保持兼容性）
             batch_record = {
                 'time': current_time,
                 'rag_results': rag_results,
                 'actions': action_plans,
-                'new_reviews_count': len(final_state.get("raw_reviews", [])),
-                'critical_count': len(result.get("critical_reviews", []))
+                'new_reviews_count': len(raw_reviews),
+                'critical_count': len(critical_reviews)
             }
             
             # 插入到头部（Prepend）
@@ -261,12 +266,32 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
             st.exception(e)
     
     # ==================== 持久化渲染区域：实时风险动态流 ====================
+    # Hero Section：使用 session_state 中的最新批次（保持即时感）
     incident_history = st.session_state.get('incident_history', [])
     
+    # 从数据库读取历史记录（用于历史记录部分）
+    db = get_database()
+    db_history = db.get_history(limit=50)  # 获取更多记录以过滤
+    
+    # 获取 Hero Section 中已显示的 review_id 集合（如果有）
+    hero_review_ids = set()
+    if incident_history:
+        latest_batch = incident_history[0]
+        latest_rag_results = latest_batch.get('rag_results', [])
+        if latest_rag_results:
+            hero_review_ids = {r.get("review_id") for r in latest_rag_results if r.get("review_id")}
+    
+    # 过滤掉 Hero Section 中已显示的记录，只保留有 RAG 结果和 Action 的记录
+    filtered_history = [
+        record for record in db_history
+        if record.get("review_id") not in hero_review_ids
+        and record.get("rag_result") is not None
+        and record.get("action_plan") is not None
+    ]
+    
+    # ==================== Part A: 最新动态 (Hero Section) ====================
     if incident_history:
         st.markdown("---")
-        
-        # ==================== Part A: 最新动态 (Hero Section) ====================
         latest_batch = incident_history[0]
         latest_rag_results = latest_batch.get('rag_results', [])
         latest_actions = latest_batch.get('actions', [])
@@ -328,66 +353,69 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
                 # Case 之间的分隔
                 if item_idx < len(latest_rag_results) - 1:
                     st.markdown("")  # 空白间隔，避免文字粘连
-        
-        # ==================== Part B: 历史回溯 (Scrollable Container) ====================
-        history_batches = incident_history[1:] if len(incident_history) > 1 else []
-        
-        if history_batches:
+    
+    # ==================== Part B: 历史回溯 (Scrollable Container) ====================
+    # 历史记录部分独立显示，即使 Hero Section 为空也会显示
+    if filtered_history:
+        if incident_history:
             st.divider()  # 分割线，清晰区分最新和历史
-            st.markdown("#### 📜 历史巡检记录")
+        else:
+            st.markdown("---")  # 如果没有 Hero Section，直接显示分割线
+        st.markdown("#### 📜 历史巡检记录")
+        
+        # 使用固定高度的滚动容器
+        with st.container(height=500, border=False):
+            # 按时间分组（简化：按日期分组）
+            grouped_by_date = defaultdict(list)
+            for record in filtered_history:
+                created_at = record.get('created_at', '')
+                # 提取日期部分（YYYY-MM-DD）
+                date_key = created_at.split(' ')[0] if ' ' in created_at else created_at
+                grouped_by_date[date_key].append(record)
             
-            # 使用固定高度的滚动容器
-            with st.container(height=500, border=False):
-                for batch_idx, batch in enumerate(history_batches, start=1):
-                    batch_time = batch.get('time', '未知时间')
-                    rag_results = batch.get('rag_results', [])
-                    actions = batch.get('actions', [])
-                    new_reviews_count = batch.get('new_reviews_count', 0)
-                    
-                    # 使用 expander 折叠历史批次
-                    with st.expander(f"📅 巡检批次: {batch_time} (新增 {new_reviews_count} 条评论)", expanded=False):
-                        # Case-Based 成组渲染：通过 review_id 匹配 RAG 和 Action
-                        if rag_results:
-                            # 创建 action 字典，以 review_id 为 key，方便查找
-                            # 支持完整匹配和部分匹配（处理可能的 ID 格式差异）
-                            action_dict = {}
-                            for action in actions:
-                                review_id = action.get('review_id')
-                                if review_id:
-                                    action_dict[review_id] = action
-                                    # 也支持 base_id 匹配（如果 review_id 包含下划线）
-                                    if '_' in str(review_id):
-                                        base_id = str(review_id).split('_')[0]
-                                        if base_id not in action_dict:
-                                            action_dict[base_id] = action
-                            
-                            for item_idx, rag_result in enumerate(rag_results):
-                                # 通过 review_id 匹配对应的 Action
-                                review_id = rag_result.get("review_id")
-                                action_item = None
-                                
-                                if review_id:
-                                    # 优先完整匹配
-                                    action_item = action_dict.get(review_id)
-                                    # 如果完整匹配失败，尝试 base_id 匹配
-                                    if not action_item and '_' in str(review_id):
-                                        base_id = str(review_id).split('_')[0]
-                                        action_item = action_dict.get(base_id)
-                                
-                                # 如果还是没匹配到，尝试按索引匹配（兜底方案）
-                                if not action_item and item_idx < len(actions):
-                                    action_item = actions[item_idx]
-                                
-                                # 渲染完整的 Case（RAG + Action 成对）
-                                render_incident_card(rag_result, action_item, batch_idx=batch_idx, item_idx=item_idx)
-                                # Case 之间的分隔
-                                if item_idx < len(rag_results) - 1:
-                                    st.markdown("")  # 空白间隔，避免文字粘连
+            # 按日期倒序显示
+            sorted_dates = sorted(grouped_by_date.keys(), reverse=True)
+            
+            for date_idx, date_key in enumerate(sorted_dates):
+                records = grouped_by_date[date_key]
+                
+                # 使用 expander 折叠历史批次
+                with st.expander(f"📅 {date_key} (共 {len(records)} 条记录)", expanded=False):
+                    for item_idx, record in enumerate(records):
+                        # 从数据库记录中提取 RAG 结果和 Action 计划
+                        rag_result = record.get('rag_result')
+                        action_plan = record.get('action_plan')
                         
-                        # 批次之间的分隔
-                        if batch_idx < len(history_batches):
-                            st.markdown("")
-    else:
-        # 如果工作流未运行，显示提示
+                        # 构建 RAG 结果对象（兼容 render_incident_card 的格式）
+                        # 注意：get_history() 已经将 JSON 解析为字典，直接使用即可
+                        if rag_result and isinstance(rag_result, dict):
+                            rag_result_obj = rag_result.copy()
+                            # 确保包含 review_id 和 review_text
+                            rag_result_obj['review_id'] = record.get('review_id')
+                            rag_result_obj['review_text'] = record.get('content', '')
+                            
+                            # 构建 Action 计划对象（兼容格式）
+                            action_item = None
+                            if action_plan and isinstance(action_plan, dict):
+                                action_item = action_plan.copy()
+                                action_item['review_id'] = record.get('review_id')
+                            
+                            # 渲染完整的 Case（RAG + Action 成对）
+                            render_incident_card(
+                                rag_result_obj,
+                                action_item,
+                                batch_idx=date_idx + 1,
+                                item_idx=item_idx
+                            )
+                            
+                            # Case 之间的分隔
+                            if item_idx < len(records) - 1:
+                                st.markdown("")  # 空白间隔，避免文字粘连
+                    
+                    # 日期批次之间的分隔
+                    if date_idx < len(sorted_dates) - 1:
+                        st.markdown("")
+    elif not incident_history:
+        # 如果工作流未运行且没有历史记录，显示提示
         st.info("👆 点击上方「运行智能工作流」按钮，开始首次增量巡检")
 

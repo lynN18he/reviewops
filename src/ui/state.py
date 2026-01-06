@@ -6,6 +6,7 @@ UI 状态管理模块
 import streamlit as st
 import pandas as pd
 import time
+from src.services.database import get_database
 
 
 def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
@@ -18,9 +19,29 @@ def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
     """
     # 检查并初始化 all_reviews（Single Source of Truth）
     if 'all_reviews' not in st.session_state:
-        # 初始化：从 CSV 文件加载历史数据
-        st.session_state.all_reviews = reviews_df.to_dict('records')
+        db = get_database()
+        
+        # 优先从数据库加载历史评论数据
+        db_reviews = db.get_all_reviews()
+        
+        if db_reviews:
+            # 从数据库加载：转换为 all_reviews 格式
+            st.session_state.all_reviews = [
+                {
+                    'review_id': r.get('review_id'),
+                    'user_id': f"user_{r.get('review_id', '').split('_')[0]}",  # 从 review_id 推断
+                    'timestamp': r.get('created_at', ''),
+                    'review_text': r.get('content', ''),
+                    'rating': r.get('rating', 0)
+                }
+                for r in db_reviews
+            ]
+        else:
+            # 如果数据库为空，从 CSV 文件加载初始数据（首次运行）
+            st.session_state.all_reviews = reviews_df.to_dict('records')
+        
         st.session_state.last_run_increment = 0
+        
         # 初始化指标基准值（用于计算增量）
         if len(st.session_state.all_reviews) > 0:
             init_df = pd.DataFrame(st.session_state.all_reviews)
@@ -49,9 +70,10 @@ def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
     if 'incremental_rag_results' not in st.session_state:
         st.session_state.incremental_rag_results = []  # 存储本次巡检的RAG结果
 
-    # 初始化历史巡检记录（实时风险动态流）
+    # 初始化历史巡检记录（实时风险动态流，Hero 区域使用 session_state）
+    # 历史区在 tab_dashboard 中从数据库读取，无需在此预加载
     if 'incident_history' not in st.session_state:
-        st.session_state.incident_history = []  # 存储所有历史巡检批次
+        st.session_state.incident_history = []
 
     # 检查是否需要刷新页面以更新数据概览
     if st.session_state.get('need_refresh', False):
