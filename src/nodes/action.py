@@ -6,6 +6,7 @@ import json
 from src.state import ReviewState
 from src.utils import init_llm
 from src.config import ActionConfig
+from src.services.database import get_database
 from langchain_core.messages import HumanMessage
 
 
@@ -92,6 +93,46 @@ def node_action_gen(state: ReviewState) -> ReviewState:
             })
     
     log_message = f"💡 行动生成节点：生成 {len(action_plans)} 个行动建议"
+    
+    # ==================== 结果回写数据库 ====================
+    db = get_database()
+    updated_count = 0
+    
+    # 构建 RAG 结果字典，以 review_id 为 key（使用 state 中的 rag_analysis_results）
+    rag_dict = {r.get("review_id"): r for r in rag_results}
+    
+    # 更新每条评论的 RAG 结果和 Action 计划到数据库
+    for action_plan in action_plans:
+        review_id = action_plan.get("review_id")
+        if not review_id:
+            continue
+        
+        # 获取对应的 RAG 结果
+        rag_result = rag_dict.get(review_id)
+        
+        # 根据 Action 的 priority 确定风险等级
+        priority = action_plan.get("priority", "Medium")
+        risk_level = None
+        if priority == "High":
+            risk_level = "high"
+        elif priority == "Medium":
+            risk_level = "medium"
+        elif priority == "Low":
+            risk_level = "low"
+        
+        # 更新数据库
+        success = db.update_analysis(
+            review_id=review_id,
+            rag_result=rag_result,
+            action_plan=action_plan,
+            risk_level=risk_level
+        )
+        
+        if success:
+            updated_count += 1
+    
+    if updated_count > 0:
+        log_message += f" | ✅ 已更新 {updated_count} 条记录到数据库"
     
     return {
         "action_plans": action_plans,
