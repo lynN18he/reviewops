@@ -1,12 +1,49 @@
 """
 监控节点：检测新评论
+支持两种输入源：MOCK_DATA_POOL（默认）或 test_tickets.csv（B2B 工单，需配置 MONITOR_USE_TICKETS_CSV=true）
 """
 
+import os
 import time
 import random
 from src.state import ReviewState
 from src.config import MonitorConfig
 from src.services.database import get_database
+
+
+def load_tickets_from_csv(csv_path: str, max_count: int = 50):
+    """
+    从 test_tickets.csv 读取工单列表，供 Monitor 作为输入源。
+    返回列表，每项为 dict：review_id（=Ticket_ID）, review_text（=User_Message）, user_id, timestamp, rating。
+    调用方需自行按 db.exists(review_id) 与 processed_ids 过滤未处理工单。
+    """
+    if not os.path.isfile(csv_path):
+        return []
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        if "Ticket_ID" not in df.columns or "User_Message" not in df.columns:
+            return []
+        rows = []
+        for _, row in df.iterrows():
+            tid = str(row.get("Ticket_ID", "")).strip()
+            if not tid:
+                continue
+            msg = str(row.get("User_Message", "")).strip()
+            if not msg:
+                continue
+            rows.append({
+                "review_id": tid,
+                "review_text": msg,
+                "user_id": f"ticket_{tid}",
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "rating": 2,  # B2B 工单默认视为潜在客诉，便于进入 Filter/RAG
+            })
+            if len(rows) >= max_count:
+                break
+        return rows
+    except Exception:
+        return []
 
 
 # ==================== Mock 数据池 ====================
@@ -93,24 +130,56 @@ MOCK_DATA_POOL = {
 def node_monitor(state: ReviewState) -> ReviewState:
     """
     节点 1: 监控新评论
-    动态模拟生成器：从 MOCK_DATA_POOL 随机采样，并添加微秒级时间戳确保唯一性
-    实现增量模拟：检查数据库，只有不存在的数据才入库
-    
-    测试优化：确保每次增量 >= 2 条评论，其中至少 1 条为正面评论
+    输入源二选一（由配置决定）：
+    - USE_TICKETS_CSV=True：从 test_tickets.csv 读取 B2B 工单（User_Message 作为评论内容）
+    - 否则：从 MOCK_DATA_POOL 随机采样，带时间戳确保唯一性
+    增量模拟：仅当 review_id 不在 DB 且未在 processed_ids 中时才入库。
     """
-    # 获取数据库管理器
     db = get_database()
-    
-    # 获取已处理的ID集合（用于内存去重，作为额外保障）
     processed_ids = set(state.get("processed_ids", []))
-    
-    # 使用微秒级时间戳（time.time_ns()）确保每次运行生成的ID绝对唯一
-    current_timestamp_ns = time.time_ns()  # 纳秒级时间戳，确保唯一性
     new_reviews = []
     new_processed_ids = []
-    
-    # 测试优化：确保每次至少生成指定数量的评论，且至少包含 1 条正面评论（如果配置要求）
-    # 1. 首先确保至少选择 1 条正面评论（如果配置要求）
+    csv_path = MonitorConfig.TICKETS_CSV_PATH
+    if not os.path.isabs(csv_path):
+        csv_path = os.path.join(os.getcwd(), csv_path)
+
+    # 输入源：从 test_tickets.csv 读取工单（B2B 场景）
+    if MonitorConfig.USE_TICKETS_CSV:
+        tickets = load_tickets_from_csv(csv_path, max_count=MonitorConfig.MIN_REVIEWS_PER_BATCH + 5)
+        for t in tickets:
+            rid = t["review_id"]
+            if db.exists(rid) or rid in processed_ids:
+                continue
+            review_data = {
+                "review_id": rid,
+                "content": t["review_text"],
+                "source": "test_tickets_csv",
+                "rating": t["rating"],
+                "timestamp": t["timestamp"],
+                "risk_level": None,
+            }
+            db.add_review(review_data)
+            new_reviews.append({
+                "review_id": rid,
+                "user_id": t["user_id"],
+                "timestamp": t["timestamp"],
+                "review_text": t["review_text"],
+                "rating": t["rating"],
+            })
+            new_processed_ids.append(rid)
+            if len(new_reviews) >= MonitorConfig.MIN_REVIEWS_PER_BATCH:
+                break
+        log_message = f"📅 工单输入源：{csv_path} | 本次新增 {len(new_reviews)} 条工单"
+        if new_reviews:
+            log_message += f" | ID: {[r['review_id'] for r in new_reviews]} | ✅ 已入库"
+        return {
+            "raw_reviews": new_reviews,
+            "processed_ids": new_processed_ids,
+            "logs": [log_message],
+        }
+
+    # 默认输入源：MOCK_DATA_POOL 随机采样
+    current_timestamp_ns = time.time_ns()
     if MonitorConfig.MUST_HAVE_POSITIVE and MOCK_DATA_POOL["positive"]:
         positive_template = random.choice(MOCK_DATA_POOL["positive"])
         unique_suffix = f"{current_timestamp_ns}_{random.randint(1000, 9999)}"

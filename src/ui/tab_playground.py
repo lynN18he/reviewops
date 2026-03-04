@@ -1,34 +1,37 @@
 """
 单条归因实验室 Tab
-包含单条评论输入、RAG 分析、行动建议生成等所有逻辑
+包含单条评论输入、归因分析（Tool 调用）、行动建议生成等所有逻辑
+原 ChromaDB RAG 已注释，改用 Mock Tools 进行 MVP 测试。
 """
 
 import streamlit as st
 import random
-from langchain_community.embeddings import DashScopeEmbeddings
+
+# ==================== 已屏蔽的 ChromaDB/向量库逻辑（保留供后续恢复）====================
+# from langchain_community.embeddings import DashScopeEmbeddings
+# from langchain_community.vectorstores import Chroma
+#
+# def init_vectorstore(api_key):
+#     """初始化向量数据库"""
+#     if not api_key:
+#         return None
+#     try:
+#         embeddings = DashScopeEmbeddings(
+#             model="text-embedding-v3",
+#             dashscope_api_key=api_key
+#         )
+#         vectorstore = Chroma(
+#             persist_directory="./chroma_db",
+#             embedding_function=embeddings
+#         )
+#         return vectorstore
+#     except Exception as e:
+#         st.error(f"向量库初始化失败: {e}")
+#         return None
+# ==================== 以上为注释掉的 RAG 逻辑 ====================
+
+
 from langchain_community.chat_models import ChatTongyi
-from langchain_community.vectorstores import Chroma
-
-
-def init_vectorstore(api_key):
-    """初始化向量数据库"""
-    if not api_key:
-        return None
-    
-    try:
-        embeddings = DashScopeEmbeddings(
-            model="text-embedding-v3",  # 与 injest.py 保持一致，使用 v3 模型（1536 维）
-            dashscope_api_key=api_key
-        )
-        
-        vectorstore = Chroma(
-            persist_directory="./chroma_db",
-            embedding_function=embeddings
-        )
-        return vectorstore
-    except Exception as e:
-        st.error(f"向量库初始化失败: {e}")
-        return None
 
 
 @st.cache_resource
@@ -36,7 +39,7 @@ def init_llm(api_key):
     """初始化 LLM"""
     if not api_key:
         return None
-    
+
     try:
         llm = ChatTongyi(
             model="qwen-plus",
@@ -49,165 +52,47 @@ def init_llm(api_key):
         return None
 
 
-def perform_rag_query(vectorstore, llm, question):
-    """执行 RAG 查询：检索 + 生成"""
-    if not vectorstore or not llm:
-        return None, []
-    
-    try:
-        # 1. 检索相关文档（使用 similarity_search_with_score 获取距离分数）
-        # 使用更大的 k 值，然后去重和过滤
-        try:
-            docs_with_scores = vectorstore.similarity_search_with_score(question, k=10)
-        except:
-            # 如果不支持 similarity_search_with_score，回退到普通搜索
-            docs = vectorstore.similarity_search(question, k=5)
-            # 简单去重，返回所有不重复的文档
-            unique_docs = []
-            seen_contents = set()
-            for doc in docs:
-                content_fingerprint = doc.page_content[:150].strip()
-                if content_fingerprint not in seen_contents:
-                    seen_contents.add(content_fingerprint)
-                    unique_docs.append(doc)
-            docs = unique_docs  # 返回所有去重后的文档，不限制数量
-        else:
-            # 2. 去重：基于文档内容的相似度去重
-            # ChromaDB 返回的是距离（distance），越小越相似
-            # 通常距离 < 1.5 表示比较相关
-            unique_docs = []
-            seen_contents = set()
-            max_distance = 1.5  # 最大距离阈值（根据实际调整）
-            
-            for doc, distance in docs_with_scores:
-                # 过滤距离过大的结果（相似度太低）
-                if distance > max_distance:
-                    continue
-                
-                # 检查内容是否重复（使用前150个字符作为指纹，更准确）
-                content_fingerprint = doc.page_content[:150].strip()
-                if content_fingerprint not in seen_contents:
-                    seen_contents.add(content_fingerprint)
-                    unique_docs.append(doc)
-                    # 不再限制数量，返回所有相关且不重复的文档
-            
-            docs = unique_docs  # 返回所有相关且去重后的文档
-        
-        # 3. 构建上下文
-        context = "\n\n".join([doc.page_content for doc in docs])
-        
-        # 3. 构建 Prompt
-        from langchain_core.messages import HumanMessage, SystemMessage
-        
-        system_template = """你是一个专业的产品分析师。请根据用户反馈和产品说明书，进行准确的归因分析。
-
-请基于以下产品说明书内容，分析用户反馈问题：
-{context}
-
-回答格式：
-- 说明书对应参数：[从产品说明书中提取的相关内容]
-- AI 判定结论：[你的判断，如果是已知局限用✅，如果是新问题用⚠️，如果是用户误用用❓]
-
-回答："""
-        
-        human_template = "用户反馈：{question}"
-        
-        system_prompt = SystemMessage(content=system_template.format(context=context))
-        human_prompt = HumanMessage(content=human_template.format(question=question))
-        
-        # 4. 调用 LLM
-        response = llm.invoke([system_prompt, human_prompt])
-        
-        # 5. 提取回答
-        if hasattr(response, 'content'):
-            answer = response.content
-        else:
-            answer = str(response)
-        
-        return answer, docs
-        
-    except Exception as e:
-        st.error(f"RAG 查询失败: {e}")
-        return None, []
+# ==================== 已屏蔽的 Chroma RAG 查询逻辑（保留供后续恢复）====================
+# def perform_rag_query(vectorstore, llm, question):
+#     """执行 RAG 查询：检索 + 生成"""
+#     ... (Chroma similarity_search + LLM 生成)
+# ==================== 以上为注释掉的 RAG 逻辑 ====================
 
 
 def match_with_spec(complaint, qa_chain=None):
-    """将用户抱怨与产品说明书进行匹配（使用 RAG）"""
-    
-    # 如果没有 RAG 链，使用简单的关键词匹配作为后备
-    if not qa_chain:
-        if '中文播客' in complaint or '中文' in complaint:
-            spec_match = "音频与语言限制：Audio Overview 目前强调为实验性功能...中文播客式输出体验明显弱于英文"
-            conclusion = "✅ 产品已知局限 - 说明书已明确标注中文支持有限"
-        elif 'PDF' in complaint or '图表' in complaint:
-            spec_match = "内容与文件限制：对纯图片 PDF、复杂表格或图像信息支持有限，图表和图像型 PDF 在解析和检索时仍可能丢失或弱化"
-            conclusion = "✅ 产品已知局限 - 说明书已明确标注图表解析受限"
+    """将用户客诉与知识库匹配：使用 Tool 调用（发版记录/已知缺陷/API SOP）进行归因分析。"""
+    # 无 LLM 时的后备：B2B 场景简单关键词匹配
+    if not qa_chain or not qa_chain.get("llm"):
+        if "401" in complaint or "403" in complaint or "HMAC" in complaint or "API Token" in complaint or "Webhook" in complaint or "授权" in complaint:
+            spec_match = "SOP 排查手册：遇到 HMAC validation failed 或 401 错误，通常是商家在 Shopify 后台重置了 API Token 但未在我们的系统更新。请引导商家重新授权。"
+            conclusion = "✅ 产品已知局限 / 配置问题 - 建议按 SOP 引导重新授权"
+        elif "昨天还好" in complaint or "今天突然" in complaint or "更新之后" in complaint or "发版" in complaint:
+            spec_match = "发版记录 2026-03-02：重构了 USPS 物流轨迹抓取爬虫模块，增加了一层限流校验。"
+            conclusion = "⚠️ 需进一步调查 - 可能与近期发版相关"
+        elif "又来了" in complaint or "一直这样" in complaint or "老毛病" in complaint:
+            spec_match = "已知缺陷 JIRA-1042：带有阿拉伯语地址的 Shopify 订单同步时，特定字符会导致解析超时。目前仍在排期修复中。"
+            conclusion = "✅ 产品已知局限 - 已知缺陷库中有相关记录"
         else:
-            spec_match = "未在说明书中找到对应描述"
+            spec_match = "未在知识库中找到对应描述，建议使用 Tool 分析。"
             conclusion = "⚠️ 需进一步调查 - 可能是新发现的问题"
         return spec_match, conclusion, []
-    
-    # 使用 RAG 进行真实检索和分析
+
+    # 使用 Tool 调用进行归因分析（L2 技术支持智能体）
     try:
-        query = f"用户反馈：{complaint}。请分析这是产品已知局限还是新问题。"
-        answer, source_docs = perform_rag_query(qa_chain['vectorstore'], qa_chain['llm'], query)
-        
-        if not answer:
-            raise Exception("RAG 查询返回空结果")
-        
-        # 解析回答，提取说明书参数和结论
-        spec_match = ""
-        conclusion = ""
-        
-        # 从回答中提取信息
-        if "说明书对应参数" in answer:
-            parts = answer.split("说明书对应参数：")
-            if len(parts) > 1:
-                spec_part = parts[1].split("AI 判定结论：")[0].strip()
-                spec_match = spec_part if spec_part else "未找到相关说明"
-        else:
-            spec_match = "未在说明书中找到对应描述"
-        
-        if "AI 判定结论" in answer:
-            conclusion = answer.split("AI 判定结论：")[-1].strip()
-        else:
-            # 从回答中推断结论
-            if "已知局限" in answer or "✅" in answer:
-                conclusion = "✅ 产品已知局限 - " + answer[:50]
-            elif "新问题" in answer or "⚠️" in answer:
-                conclusion = "⚠️ 需进一步调查 - " + answer[:50]
-            else:
-                conclusion = "❓ 需要人工判断 - " + answer[:50]
-        
-        # 如果没有提取到，使用源文档内容
-        if not spec_match and source_docs:
-            spec_match = "\n\n".join([doc.page_content[:200] + "..." for doc in source_docs[:2]])
-        
-        # 返回源文档内容用于展示（去重）
-        source_contents = []
-        seen_contents = set()
-        for doc in source_docs:
-            content = doc.page_content
-            # 使用前100个字符作为指纹去重
-            fingerprint = content[:100].strip()
-            if fingerprint not in seen_contents:
-                seen_contents.add(fingerprint)
-                source_contents.append(content)
-        
+        from src.nodes.rag import run_attribution_with_tools
+        conclusion, reason, evidence, tool_outputs = run_attribution_with_tools(qa_chain["llm"], complaint)
+        if conclusion is None:
+            conclusion = "❓ 需要人工判断"
+        spec_match = evidence if evidence else "\n\n".join(tool_outputs) if tool_outputs else "未获取到工具返回证据"
+        if not spec_match:
+            spec_match = "未在知识库中找到对应描述"
+        # 用于展示的“证据来源”列表（此处为工具返回的文本）
+        source_contents = list(tool_outputs) if tool_outputs else []
         return spec_match, conclusion, source_contents
-        
     except Exception as e:
-        st.warning(f"RAG 分析出错: {e}，使用后备方案")
-        # 后备方案
-        if '中文播客' in complaint or '中文' in complaint:
-            spec_match = "音频与语言限制：Audio Overview 目前强调为实验性功能...中文播客式输出体验明显弱于英文"
-            conclusion = "✅ 产品已知局限 - 说明书已明确标注中文支持有限"
-        elif 'PDF' in complaint or '图表' in complaint:
-            spec_match = "内容与文件限制：对纯图片 PDF、复杂表格或图像信息支持有限，图表和图像型 PDF 在解析和检索时仍可能丢失或弱化"
-            conclusion = "✅ 产品已知局限 - 说明书已明确标注图表解析受限"
-        else:
-            spec_match = "未在说明书中找到对应描述"
-            conclusion = "⚠️ 需进一步调查 - 可能是新发现的问题"
+        st.warning(f"归因分析出错: {e}，使用后备方案")
+        spec_match = "未在知识库中找到对应描述"
+        conclusion = "⚠️ 需进一步调查 - 可能是新发现的问题"
         return spec_match, conclusion, []
 
 
@@ -235,7 +120,7 @@ def generate_action_plan(topic_name: str, rag_conclusion: str, user_complaints: 
     complaints_text = "\n".join([f"- {complaint}" for complaint in user_complaints[:5]])
     
     # 构建 Prompt
-    prompt_template = """你是一个能够根据问题性质做出决策的产品经理。
+    prompt_template = """你是 B2B 电商与物流 SaaS 的 L2 技术支持智能体，能够根据问题性质做出决策。
 
 请根据以下信息，生成一个具体的行动计划：
 
@@ -339,12 +224,12 @@ def render_tab(api_key):
         api_key: DashScope API Key
     """
     st.markdown("### 🔬 单条评论归因分析")
-    st.caption("输入单条用户评论，进行深度 RAG 归因分析")
+    st.caption("输入单条用户评论，由 L2 技术支持智能体调用工具（发版记录/已知缺陷/API SOP）进行归因分析")
     
     # 单条评论输入
     user_input = st.text_area(
         "📝 请输入用户评论",
-        placeholder="例如：夜间飞行时避障功能完全失效，差点撞墙...",
+        placeholder="例如：昨天还好好的，今天早上 USPS 的轨迹全不更新了！",
         height=100,
         key="manual_review_input"
     )
@@ -362,20 +247,18 @@ def render_tab(api_key):
             st.error("❌ 请先在侧边栏配置 DashScope API Key")
             st.stop()
         
-        # 初始化 RAG 组件
-        with st.spinner("🔧 正在初始化 RAG 系统..."):
-            vectorstore = init_vectorstore(api_key)
+        # 初始化 LLM（已改用 Tool 调用，不再依赖向量库）
+        with st.spinner("🔧 正在初始化智能体..."):
             llm = init_llm(api_key)
-            
-            if not vectorstore or not llm:
-                st.error("❌ RAG 系统初始化失败，请检查 API Key 和向量库")
+            if not llm:
+                st.error("❌ 初始化失败，请检查 API Key")
                 st.stop()
-        
-        # 执行 RAG 分析
-        with st.spinner("🧠 AI 正在分析中..."):
+
+        # 执行归因分析（Tool 调用：发版记录 / 已知缺陷 / API SOP）
+        with st.spinner("🧠 AI 正在分析中（工具调用）..."):
             spec_match, conclusion, source_docs = match_with_spec(
                 user_input,
-                qa_chain={'vectorstore': vectorstore, 'llm': llm}
+                qa_chain={"llm": llm}
             )
         
         st.success("✅ 分析完成！")
@@ -401,9 +284,9 @@ def render_tab(api_key):
                 st.info(conclusion)
         
         with col_right:
-            st.markdown("##### 📖 说明书对应参数")
+            st.markdown("##### 📖 工具/知识库证据")
             if len(spec_match) > 500:
-                with st.expander("📄 查看完整说明书内容", expanded=True):
+                with st.expander("📄 查看完整证据内容", expanded=True):
                     st.markdown(spec_match)
             else:
                 st.markdown(f"<div style='background-color: #f0f9ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #0ea5e9;'>{spec_match}</div>", unsafe_allow_html=True)
