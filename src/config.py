@@ -53,26 +53,21 @@ class VectorStoreConfig:
 
 
 class FilterConfig:
-    """筛选节点配置（兼容原硬件场景 + B2B 电商/物流客诉）"""
-    # 降级模式关键词列表
+    """筛选节点配置（B2B 电商/物流 SaaS 工单）"""
+    # 降级模式关键词（SaaS 故障相关）
     KEYWORDS: list = [
-        "故障", "失效", "问题", "坏", "不工作", "安全", "危险",
-        "质量", "避障", "抖动", "不稳定", "撞", "差点", "虚标", "欺骗",
-        "报错", "失败", "同步", "不更新", "401", "403", "Webhook", "发版", "老毛病"
+        "502", "504", "白屏", "宕机", "全不更新", "无法登陆", "同步失败",
+        "报错", "失败", "401", "403", "Webhook", "发版", "鉴权失效", "数据库超时",
+        "业务停摆", "资损", "理赔",
     ]
-    
-    # 评分阈值
-    RATING_THRESHOLD: int = int(os.getenv("FILTER_RATING_THRESHOLD", "3"))  # 低于此评分为高危
 
 
 class MonitorConfig:
     """监控节点配置"""
-    # Mock 数据生成配置
-    MIN_REVIEWS_PER_BATCH: int = int(os.getenv("MONITOR_MIN_REVIEWS", "2"))  # 每批最少评论数
-    MUST_HAVE_POSITIVE: bool = os.getenv("MONITOR_MUST_HAVE_POSITIVE", "true").lower() == "true"  # 是否必须包含正面评论
-    # B2B 工单输入源：为 True 时从 test_tickets.csv 读取工单作为巡检输入，否则使用 MOCK_DATA_POOL
+    MIN_TICKETS_PER_BATCH: int = int(os.getenv("MONITOR_MIN_TICKETS", "2"))  # 每批最少工单数
     USE_TICKETS_CSV: bool = os.getenv("MONITOR_USE_TICKETS_CSV", "false").lower() == "true"
     TICKETS_CSV_PATH: str = os.getenv("MONITOR_TICKETS_CSV_PATH", "test_tickets.csv")
+    TICKETS_INCREMENTAL_CSV: str = os.getenv("MONITOR_TICKETS_INCREMENTAL_CSV", "test_tickets_incremental.csv")
 
 
 class ActionConfig:

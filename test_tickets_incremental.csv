@@ -1,0 +1,31 @@
+Ticket_ID,User_Message,True_Category,Expected_Tool
+TIK-051,"讲真你们现在这个定价对我们这种刚起量的 Shopify 卖家真的压力山大，一个月几百刀现金流扛不住啊，能不能给个 startup plan？",噪音,None
+TIK-052,"能不能尽快接一下南非那个 Buffalo 物流？我们现在全靠手动上传 tracking，客服都在骂系统不好用。",噪音,None
+TIK-053,"你们后台统计数据和我们 ERP 对不上，这样财务根本不信你们系统，能不能优化下报表逻辑？",噪音,None
+TIK-054,"调用 create order API 一直返回 401 Unauthorized，我们确认 header 里带了 Authorization: Bearer token，是不是 token 过期机制变了？",配置错误,search_api_docs_and_sop
+TIK-055,"批量查询接口现在疯狂报 429，是不是你们最近把 rate limit 下调了？我们只是按每秒 5 次在调。",配置错误,search_api_docs_and_sop
+TIK-056,"Webhook 显示 signature mismatch，我们用的是 Node.js crypto 模块按文档算 HMAC-SHA256，到底哪里不对？",配置错误,search_api_docs_and_sop
+TIK-057,"Shopify App 显示已安装，但你们后台提示 shop not found，是不是我们 domain 填错了？需要填 myshopify.com 还是自定义域名？",配置错误,search_api_docs_and_sop
+TIK-058,"自动发货规则设置了 weight>30kg 走海外仓，但实际还是走默认仓，是不是条件判断不支持浮点数？",配置错误,search_api_docs_and_sop
+TIK-059,"调用 tracking subscribe API 返回 400 Bad Request，说 carrier_code invalid，但这个代码是你们文档给的啊。",配置错误,search_api_docs_and_sop
+TIK-060,"我们 refresh token 后旧 token 马上失效吗？现在所有 API 都报 401，是不是没有做 token rotation？",配置错误,search_api_docs_and_sop
+TIK-061,"昨天开始所有 FedEx 运单状态都停在 label created，不再更新，前天还正常，你们是不是更新了抓取逻辑？",突发故障,search_release_notes
+TIK-062,"今天凌晨之后新注册用户触发不了自动欢迎邮件 flow，是不是你们营销模块挂了？昨天还好好的。",突发故障,search_release_notes
+TIK-063,"订单列表突然不能按 created_at 排序了，UI 直接灰掉，这个是新版本改权限了吗？",突发故障,search_release_notes
+TIK-064,"我们 API 集成好几个月都很稳定，今天突然大量 500 error，是不是你们服务端 deploy 出问题了？",突发故障,search_release_notes
+TIK-065,"tracking page 今天加载特别慢，TTFB 快三秒了，昨天还不到 500ms，是不是 CDN 配置变了？",突发故障,search_release_notes
+TIK-066,"只要订单地址里包含德语 umlaut 字符（ä, ö, ü），同步就会报编码错误，这个问题从去年到现在都还在。",历史缺陷,search_known_issues
+TIK-067,"多包裹订单只会显示第一个 tracking number，这个 bug 我们去年就提过，现在还是老样子。",历史缺陷,search_known_issues
+TIK-068,"只要客户使用 discount code，你们的售后自动营销 flow 就不会触发，这个 edge case 一直没修。",历史缺陷,search_known_issues
+TIK-069,"我们开启 multi-store 模式后，偶尔会串单，把 A 店的订单同步到 B 店，这个老问题又出现了。",历史缺陷,search_known_issues
+TIK-070,"历史订单 full sync 超过 1 万单就会中途停止，没有错误提示，这个限制什么时候能优化？",历史缺陷,search_known_issues
+TIK-071,"为什么你们高级报表功能一定要 Enterprise 才能用？我们只是想导出更细的维度而已，这样真的很劝退。",噪音,None
+TIK-072,"我们技术说调用 webhook retry API 返回 403，说没有 admin scope，但我们是 owner 账号操作的，还需要开什么权限？",配置错误,search_api_docs_and_sop
+TIK-073,"API 返回 422 Unprocessable Entity，说 tracking_number format invalid，可是我们用的是 UPS 官方给的单号格式啊。",配置错误,search_api_docs_and_sop
+TIK-074,"Shopify 后台重新授权后，你们系统还是显示 token expired，是不是有缓存？需要手动 revoke 吗？",配置错误,search_api_docs_and_sop
+TIK-075,"自动匹配物流商规则里正则表达式是不是不支持 lookahead？我们写了 pattern 结果完全不生效。",配置错误,search_api_docs_and_sop
+TIK-076,"今天开始所有 webhook event 都延迟 15 分钟以上，我们的库存同步严重滞后，是不是你们队列 backlog 了？",突发故障,search_release_notes
+TIK-077,"批量更新 tracking 的接口今天 response 结构变了，多了一个 meta 字段，我们解析直接报错，是不是接口版本升级没通知？",突发故障,search_release_notes
+TIK-078,"只要订单包含 gift card SKU，你们系统就会跳过自动发货，这个 bug 已经说了很多次了。",历史缺陷,search_known_issues
+TIK-079,"开启自动翻译功能后，法语地址偶尔会被错误翻译成英语，导致物流标签出错，这个问题一直没彻底解决。",历史缺陷,search_known_issues
+TIK-080,"多币种结算下，你们的 tracking 页面金额显示会重复货币符号，这个 UI bug 我们反馈半年了。",历史缺陷,search_known_issues

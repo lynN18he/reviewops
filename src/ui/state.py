@@ -9,56 +9,43 @@ import time
 from src.services.database import get_database
 
 
-def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
+def init_session_state(tickets_df: pd.DataFrame, calculate_metrics):
     """
-    初始化 session_state
-    
+    初始化 session_state（工单为 SSOT）
+
     Args:
-        reviews_df: 初始评论数据 DataFrame
-        calculate_metrics: 计算指标的函数
+        tickets_df: 工单数据 DataFrame（含 review_id, review_text, user_id, timestamp, urgency_level, category）
+        calculate_metrics: 计算指标函数 (df, session_state?) -> (total_tickets, l1_rate, p0_rate)
     """
-    # 检查并初始化 all_reviews（Single Source of Truth）
+    # 检查并初始化 all_reviews（与 Graph 兼容：review_id, review_text, user_id, timestamp, urgency_level, category）
     if 'all_reviews' not in st.session_state:
         db = get_database()
-        
-        # 优先从数据库加载历史评论数据
         db_reviews = db.get_all_reviews()
-        
         if db_reviews:
-            # 从数据库加载：转换为 all_reviews 格式
             st.session_state.all_reviews = [
                 {
                     'review_id': r.get('review_id'),
-                    'user_id': f"user_{r.get('review_id', '').split('_')[0]}",  # 从 review_id 推断
+                    'user_id': f"ticket_{r.get('review_id', '')}" if isinstance(r.get('review_id'), str) and not r.get('review_id', '').startswith('ticket_') else f"user_{str(r.get('review_id', ''))[:20]}",
                     'timestamp': r.get('created_at', ''),
                     'review_text': r.get('content', ''),
-                    'rating': r.get('rating', 0)
+                    'urgency_level': r.get('urgency_level'),
+                    'category': r.get('category'),
                 }
                 for r in db_reviews
             ]
         else:
-            # 如果数据库为空，从 CSV 文件加载初始数据（首次运行）
-            st.session_state.all_reviews = reviews_df.to_dict('records')
-        
+            st.session_state.all_reviews = tickets_df.to_dict('records') if not tickets_df.empty else []
         st.session_state.last_run_increment = 0
-        
-        # 初始化指标基准值（用于计算增量）
         if len(st.session_state.all_reviews) > 0:
             init_df = pd.DataFrame(st.session_state.all_reviews)
-            if 'rating' in init_df.columns:
-                init_df['rating'] = pd.to_numeric(init_df['rating'], errors='coerce').fillna(0)
-                init_total, init_avg, init_negative = calculate_metrics(init_df)
-                st.session_state['prev_total_reviews'] = init_total
-                st.session_state['prev_avg_rating'] = init_avg
-                st.session_state['prev_negative_ratio'] = init_negative
-            else:
-                st.session_state['prev_total_reviews'] = 0
-                st.session_state['prev_avg_rating'] = 0.0
-                st.session_state['prev_negative_ratio'] = 0.0
+            init_total, init_l1, init_p0 = calculate_metrics(init_df, None)
+            st.session_state['prev_total_tickets'] = init_total
+            st.session_state['prev_l1_rate'] = init_l1
+            st.session_state['prev_p0_rate'] = init_p0
         else:
-            st.session_state['prev_total_reviews'] = 0
-            st.session_state['prev_avg_rating'] = 0.0
-            st.session_state['prev_negative_ratio'] = 0.0
+            st.session_state['prev_total_tickets'] = 0
+            st.session_state['prev_l1_rate'] = 0.0
+            st.session_state['prev_p0_rate'] = 0.0
 
     # 初始化 RAG 分析结果存储
     if 'latest_rag_results' not in st.session_state:
@@ -71,9 +58,12 @@ def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
         st.session_state.incremental_rag_results = []  # 存储本次巡检的RAG结果
 
     # 初始化历史巡检记录（实时风险动态流，Hero 区域使用 session_state）
-    # 历史区在 tab_dashboard 中从数据库读取，无需在此预加载
     if 'incident_history' not in st.session_state:
         st.session_state.incident_history = []
+    # 一次性清理：迁移到 B2B 工单后清空旧批次，避免展示历史中的「评论/无人机」残留
+    if not st.session_state.get('incident_history_tickets_migrated', False):
+        st.session_state.incident_history = []
+        st.session_state['incident_history_tickets_migrated'] = True
 
     # 检查是否需要刷新页面以更新数据概览
     if st.session_state.get('need_refresh', False):

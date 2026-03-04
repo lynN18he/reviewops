@@ -20,9 +20,8 @@ def mock_env_vars():
         "RAG_DISTANCE_THRESHOLD": "1.5",
         "RAG_MAX_CONTEXT_LENGTH": "300",
         "RAG_MAX_DOCS_IN_CONTEXT": "3",
-        "FILTER_RATING_THRESHOLD": "3",
-        "MONITOR_MIN_REVIEWS": "2",
-        "MONITOR_MUST_HAVE_POSITIVE": "true",
+        "MONITOR_MIN_TICKETS": "2",
+        "MONITOR_TICKETS_INCREMENTAL_CSV": "test_tickets_incremental.csv",
         "ACTION_DEFAULT_TYPE": "Jira Ticket",
         "ACTION_DEFAULT_PRIORITY": "Medium"
     }, clear=False):

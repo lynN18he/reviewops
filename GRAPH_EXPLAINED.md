@@ -1,59 +1,54 @@
 # ReviewOps 工作流详解：给初学者的完整指南
 
-> 本文档用通俗易懂的语言解释 ReviewOps 的工作流机制，帮助你深入理解代码。
+> 本文档说明 ReviewOps（B2B 电商/物流 SaaS 工单智能分诊）的工作流机制，便于理解代码与数据流。
 
 ---
 
-## 1. ReviewState 的"追加模式" vs "覆盖模式"
+## 1. ReviewState 的「追加模式」与「覆盖模式」
 
-### 1.1 什么是"追加模式"和"覆盖模式"？
+### 1.1 什么是「追加」和「覆盖」？
 
-想象一下，你有一个**笔记本**（这就是 `ReviewState`），里面有很多页（字段）：
+可以把 `ReviewState` 想象成一个**状态本**，里面有多类信息（字段）：
 
-- **追加模式**：就像在日记本上**继续写**，新内容**追加**到旧内容后面
-- **覆盖模式**：就像在草稿纸上**重新写**，新内容**替换**掉旧内容
+- **追加模式**：新内容**接在**旧内容后面，不丢历史
+- **覆盖模式**：新内容**整体替换**旧内容，只保留当前批次
 
-### 1.2 在哪里定义的？
+### 1.2 在哪里定义？
 
-**答案：在 `src/state.py` 的 `reducer` 函数中！**
-
-让我们看看代码：
+在 **`src/state.py`** 的 **`reducer`** 中定义合并规则。
 
 ```python
 # src/state.py
 
 def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
     """合并状态更新"""
-    merged = state.copy()  # 先复制一份旧状态
-    
+    merged = state.copy()
+
     # ========== 追加模式 ==========
     if "logs" in update:
-        # logs 是追加的：旧日志 + 新日志
         merged["logs"] = state.get("logs", []) + update.get("logs", [])
         # 例如：[旧日志1, 旧日志2] + [新日志3] = [旧日志1, 旧日志2, 新日志3]
-    
+
     if "processed_ids" in update:
-        # processed_ids 是并集合并（去重）
         existing_ids = set(state.get("processed_ids", []))
         new_ids = set(update.get("processed_ids", []))
         merged["processed_ids"] = list(existing_ids | new_ids)
-        # 例如：[1, 2] | [2, 3] = [1, 2, 3]（去重）
-    
+        # 例如：[TIK-051, TIK-052] | [TIK-053, TIK-054] = [TIK-051, TIK-052, TIK-053, TIK-054]（去重）
+
     # ========== 覆盖模式 ==========
     if "raw_reviews" in update:
-        # raw_reviews 是覆盖的：直接用新值替换旧值
         merged["raw_reviews"] = update.get("raw_reviews", [])
-        # 例如：旧值 [评论1, 评论2] 被新值 [评论3, 评论4] 完全替换
-    
+        # 例如：旧值 [工单A, 工单B] 被新值 [工单C, 工单D] 完全替换
+
     if "critical_reviews" in update:
         merged["critical_reviews"] = update.get("critical_reviews", [])
-    
+
     if "rag_analysis_results" in update:
         merged["rag_analysis_results"] = update.get("rag_analysis_results", [])
-    
+
     if "action_plans" in update:
         merged["action_plans"] = update.get("action_plans", [])
-    
+
     return merged
 ```
 
@@ -61,338 +56,292 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 
 | 字段名 | 模式 | 原因 | 示例 |
 |--------|------|------|------|
-| **`logs`** | ✅ **追加** | 日志需要保留历史，不能丢失 | `[旧日志] + [新日志]` |
-| **`processed_ids`** | ✅ **并集合并** | ID 集合需要去重，不能重复处理 | `[1,2] | [2,3] = [1,2,3]` |
-| **`raw_reviews`** | ❌ **覆盖** | 每次 Monitor 生成的都是"新一批"评论，替换旧的 | `[评论1,2]` → `[评论3,4]` |
-| **`critical_reviews`** | ❌ **覆盖** | Filter 筛选的是当前批次的评论，替换旧的 | `[高危1,2]` → `[高危3,4]` |
-| **`rag_analysis_results`** | ❌ **覆盖** | RAG 分析的是当前批次的评论，替换旧的 | `[结果1,2]` → `[结果3,4]` |
-| **`action_plans`** | ❌ **覆盖** | Action 生成的是当前批次的结果，替换旧的 | `[行动1,2]` → `[行动3,4]` |
+| **`logs`** | ✅ **追加** | 保留完整执行历史，便于排查 | `[旧日志] + [新日志]` |
+| **`processed_ids`** | ✅ **并集合并** | 工单 ID 去重，避免重复处理 | `[TIK-051, TIK-052] \| [TIK-053] = [TIK-051, TIK-052, TIK-053]` |
+| **`raw_reviews`** | ❌ **覆盖** | 每次 Monitor 只产出「本批」新工单 | `[工单1, 工单2]` → `[工单3, 工单4]` |
+| **`critical_reviews`** | ❌ **覆盖** | Filter 只筛选本批的高危工单 | `[高危1, 高危2]` → `[高危3, 高危4]` |
+| **`rag_analysis_results`** | ❌ **覆盖** | RAG 只分析本批工单的归因结果 | `[结果1, 结果2]` → `[结果3, 结果4]` |
+| **`action_plans`** | ❌ **覆盖** | Action 只生成本批的行动建议 | `[行动1, 行动2]` → `[行动3, 行动4]` |
 
 ### 1.4 为什么这样设计？
 
-**追加模式（logs, processed_ids）**：
-- **logs**: 需要保留完整的执行历史，方便调试和追踪
-- **processed_ids**: 需要累积所有已处理的ID，确保幂等性（不会重复处理）
+- **追加（logs, processed_ids）**  
+  - `logs`：保留完整执行轨迹，方便调试与审计。  
+  - `processed_ids`：累积已处理工单 ID，保证幂等（同一条工单不重复分诊）。
 
-**覆盖模式（其他字段）**：
-- 这些字段代表的是**当前批次**的数据，不是历史累积
-- 每次工作流运行，都是处理"新的一批"数据，所以应该替换，而不是追加
-- 例如：`raw_reviews` 是"这次新发现的评论"，不是"所有历史评论"
+- **覆盖（其余字段）**  
+  - 这些字段表示**当前这一批**的数据，不是全量历史。  
+  - 每次运行只处理「本批」新工单，所以用新结果整体替换；例如 `raw_reviews` 表示「本批新拉取的工单」，不是「全部历史工单」。
 
 ---
 
-## 2. 完整工作流流程图（ASCII 图）
+## 2. 完整工作流流程图（ASCII）
 
-让我用 ASCII 图画出整个流程，并标注每个步骤 State 的变化：
+下面按步骤标出各节点对 State 的读写与变化：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    初始状态 (Initial State)                      │
 │  State = {                                                       │
-│    raw_reviews: [],                                             │
-│    critical_reviews: [],                                        │
-│    rag_analysis_results: [],                                    │
-│    action_plans: [],                                            │
-│    logs: [],                                                    │
-│    processed_ids: [101, 102, ...]  ← 保留历史已处理ID           │
+│    raw_reviews: [],                                              │
+│    critical_reviews: [],                                          │
+│    rag_analysis_results: [],                                     │
+│    action_plans: [],                                             │
+│    logs: [],                                                     │
+│    processed_ids: [TIK-051, TIK-052, ...]  ← 保留历史已处理 ID   │
 │  }                                                               │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
-                    [用户点击"运行智能工作流"]
+                    [用户点击「运行智能工作流」]
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│  📡 Monitor Node (node_monitor)                                 │
+│  📡 Monitor Node (node_monitor)                                  │
 │  ─────────────────────────────────────────────────────────────  │
-│  输入: state.processed_ids = [101, 102, ...]                   │
+│  输入: state.processed_ids = [TIK-051, TIK-052, ...]            │
 │                                                                  │
 │  处理:                                                           │
-│    1. 从 MOCK_DATA_POOL 随机采样                                │
-│    2. 生成唯一ID: base_id + 时间戳 + 随机数                     │
-│    3. 检查 processed_ids，跳过已处理的                          │
-│    4. 生成新评论列表                                             │
+│    1. 优先从 test_tickets_incremental.csv 读取工单（否则从      │
+│       test_tickets.csv 读取）                                    │
+│    2. 打乱顺序后，按 MIN_TICKETS_PER_BATCH 取本批数量            │
+│    3. 过滤：已存在于 DB 或 processed_ids 的工单跳过              │
+│    4. 写入 SQLite（reviews 表），并生成本批 raw_reviews         │
 │                                                                  │
 │  输出:                                                           │
 │    {                                                             │
-│      raw_reviews: [评论A, 评论B],      ← 覆盖模式               │
-│      processed_ids: [201, 202],        ← 并集合并（追加新ID）   │
-│      logs: ["📅 检测到 2 条新增评论"]  ← 追加模式               │
+│      raw_reviews: [工单A, 工单B],        ← 覆盖                  │
+│      processed_ids: [TIK-053, TIK-054],  ← 并集合并（新 ID）     │
+│      logs: ["📅 工单输入源：... | 本次新增 2 条工单"]  ← 追加    │
 │    }                                                             │
 │                                                                  │
 │  State 变化:                                                     │
-│    ✅ raw_reviews: [] → [评论A, 评论B]  (覆盖)                  │
-│    ✅ processed_ids: [101,102] → [101,102,201,202]  (并集)      │
-│    ✅ logs: [] → ["📅 检测到 2 条新增评论"]  (追加)             │
+│    ✅ raw_reviews: [] → [工单A, 工单B]  (覆盖)                   │
+│    ✅ processed_ids: [TIK-051,052] → [..., TIK-053, TIK-054]     │
+│    ✅ logs: [] → ["📅 ... 本次新增 2 条工单"]  (追加)            │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│  🔍 Filter Node (node_filter)                                   │
+│  🔍 Filter Node (node_filter)                                    │
 │  ─────────────────────────────────────────────────────────────  │
-│  输入: state.raw_reviews = [评论A, 评论B]                       │
+│  输入: state.raw_reviews = [工单A, 工单B]                        │
 │                                                                  │
 │  处理:                                                           │
-│    1. 构建筛选 Prompt（包含所有评论）                           │
-│    2. 调用 LLM 进行语义筛选                                      │
-│    3. 解析 JSON，提取高危评论ID                                 │
-│    4. 匹配评论（支持完整ID和base_id匹配）                       │
+│    1. 构建 B2B SaaS 高危工单筛选 Prompt（核心业务阻断、系统级   │
+│       报错、高情绪资损等）                                        │
+│    2. 调用 LLM 返回 critical_review_ids；失败时用关键词兜底     │
+│       （502、504、白屏、宕机、全不更新、无法登陆等）             │
+│    3. 按 ID 匹配出本批高危工单列表                              │
 │                                                                  │
 │  输出:                                                           │
 │    {                                                             │
-│      critical_reviews: [评论A],        ← 覆盖模式（筛选结果）    │
-│      logs: ["🔍 筛选出 1 条高危评论"]  ← 追加模式               │
+│      critical_reviews: [工单A],        ← 覆盖（筛选结果）        │
+│      logs: ["🔍 筛选节点：... 筛选出 1 条高危工单"]  ← 追加      │
 │    }                                                             │
 │                                                                  │
 │  State 变化:                                                     │
-│    ✅ critical_reviews: [] → [评论A]  (覆盖)                    │
-│    ✅ logs: [旧日志] → [旧日志, "🔍 筛选出 1 条高危评论"]  (追加)│
-│    ⚠️ raw_reviews: [评论A, 评论B]  (保持不变，但不再使用)      │
+│    ✅ critical_reviews: [] → [工单A]  (覆盖)                     │
+│    ✅ logs: [旧日志] → [旧日志, "🔍 ... 1 条高危工单"]  (追加)   │
+│    ⚠️ raw_reviews: [工单A, 工单B]  (不变，后续节点不再使用)     │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
-                    [条件判断: 是否有高危评论?]
+                    [条件判断: 是否有高危工单?]
                               ↓
                     ┌─────────┴─────────┐
                     │                   │
-            [有高危评论]          [无高危评论]
+            [有高危工单]          [无高危工单]
                     │                   │
                     ↓                   ↓
 ┌─────────────────────────────────┐   ┌──────────────────────┐
-│  📄 RAG Node (node_rag_analysis)│   │  直接结束 (END)      │
+│  📄 RAG Node (node_rag_analysis) │   │  直接结束 (END)       │
 │  ───────────────────────────────│   │                      │
-│  输入: state.critical_reviews   │   │  State 保持 Filter   │
-│        = [评论A]                │   │  节点的输出不变      │
+│  输入: state.critical_reviews    │   │  State 保持 Filter   │
+│        = [工单A]                 │   │  节点的输出不变      │
 │                                  │   └──────────────────────┘
 │  处理:                           │
-│    1. 初始化向量库（ChromaDB）   │
-│    2. 向量相似度检索相关文档     │
-│    3. 过滤低相关性结果           │
-│    4. 组装 RAG Prompt           │
-│    5. 调用 LLM 进行归因分析      │
-│                                  │
+│    1. 对每条高危工单调用 L2 智能体（Tool 调用）                  │
+│    2. 工具：search_known_issues / search_release_notes /       │
+│       search_api_docs_and_sop（基于 ChromaDB 相似度检索）       │
+│    3. 模型根据工具返回做归因，输出 conclusion / reason / evidence│
+│                                                                  │
 │  输出:                           │
 │    {                             │
 │      rag_analysis_results: [     │
 │        {                         │
-│          review_id: "201_xxx",   │
-│          conclusion: "⚠️ 产品缺陷",│
+│          review_id: "TIK-054",    │
+│          conclusion: "✅ 配置问题",│
 │          reason: "分析原因...",   │
 │          evidence: "证据片段..."  │
 │        }                         │
 │      ],                          │
-│      logs: ["📄 完成 1 条归因分析"]│
+│      logs: ["📄 完成 N 条工单的归因分析（已使用 Tool 调用）"]    │
 │    }                             │
 │                                  │
 │  State 变化:                     │
-│    ✅ rag_analysis_results: [] → │
-│       [{结论: "⚠️ 产品缺陷", ...}]│
-│    ✅ logs: [旧日志] → [旧日志, "📄 完成 1 条归因分析"]│
-│    ⚠️ critical_reviews: [评论A]  (保持不变，但不再使用)│
+│    ✅ rag_analysis_results: [] →  │
+│       [{ conclusion, reason, evidence, ... }]                   │
+│    ✅ logs: [旧日志] → [旧日志, "📄 完成 N 条工单的归因分析"]   │
+│    ⚠️ critical_reviews: [工单A]  (不变，后续节点不再使用)      │
 └─────────────────────────────────┘
                     ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │  💡 Action Node (node_action_gen)                                │
 │  ─────────────────────────────────────────────────────────────  │
-│  输入: state.rag_analysis_results = [{结论: "⚠️ 产品缺陷", ...}]│
+│  输入: state.rag_analysis_results = [{ conclusion, reason, ... }]│
 │                                                                  │
 │  处理:                                                           │
-│    1. 构建行动生成 Prompt（包含归因结果）                        │
-│    2. 调用 LLM 生成 JSON 格式的行动建议                          │
-│    3. 验证字段完整性（action_type, title, content, priority）   │
-│    4. 解析 JSON，提取行动建议                                   │
+│    1. 根据归因结果构建行动生成 Prompt                             │
+│    2. 调用 LLM 生成 JSON（action_type, title, content, priority）│
+│    3. 根据 priority 映射 risk_level / urgency_level（P0/P1/P2）│
+│    4. 写回 SQLite：更新 rag_result、action_plan、urgency_level、│
+│       category 等                                               │
 │                                                                  │
 │  输出:                                                           │
 │    {                                                             │
 │      action_plans: [                                            │
 │        {                                                         │
-│          review_id: "201_xxx",                                  │
+│          review_id: "TIK-054",                                   │
 │          action_type: "Jira Ticket",                            │
-│          title: "修复产品缺陷：...",                            │
-│          content: "详细内容...",                                │
+│          title: "处理工单 TIK-054 的问题",                       │
+│          content: "详细内容...",                                 │
 │          priority: "High"                                        │
 │        }                                                         │
 │      ],                                                          │
-│      logs: ["💡 生成 1 个行动建议"]  ← 追加模式                 │
+│      logs: ["💡 行动生成节点：生成 N 个行动建议 | ✅ 已更新..."]  │
 │    }                                                             │
 │                                                                  │
 │  State 变化:                                                     │
-│    ✅ action_plans: [] → [{Jira Ticket, High, ...}]  (覆盖)    │
-│    ✅ logs: [旧日志] → [旧日志, "💡 生成 1 个行动建议"]  (追加)  │
-│    ⚠️ rag_analysis_results: [...]  (保持不变，但不再使用)       │
+│    ✅ action_plans: [] → [{ Jira Ticket, High, ... }]  (覆盖)    │
+│    ✅ logs: [旧日志] → [旧日志, "💡 生成 N 个行动建议"]  (追加)  │
+│    ⚠️ rag_analysis_results: [...]  (不变，不再使用)              │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                    最终状态 (Final State)                        │
 │  State = {                                                       │
-│    raw_reviews: [评论A, 评论B],        ← Monitor 的输出         │
-│    critical_reviews: [评论A],            ← Filter 的输出         │
-│    rag_analysis_results: [{结论: "⚠️ 产品缺陷", ...}],          │
-│    action_plans: [{Jira Ticket, High, ...}],                    │
+│    raw_reviews: [工单A, 工单B],        ← Monitor 输出           │
+│    critical_reviews: [工单A],          ← Filter 输出             │
+│    rag_analysis_results: [{ conclusion, ... }],                 │
+│    action_plans: [{ Jira Ticket, High, ... }],                  │
 │    logs: [                                                        │
-│      "📅 检测到 2 条新增评论",          ← Monitor 的日志         │
-│      "🔍 筛选出 1 条高危评论",          ← Filter 的日志          │
-│      "📄 完成 1 条归因分析",            ← RAG 的日志             │
-│      "💡 生成 1 个行动建议"             ← Action 的日志          │
+│      "📅 ... 本次新增 2 条工单",       ← Monitor 日志            │
+│      "🔍 ... 筛选出 1 条高危工单",     ← Filter 日志             │
+│      "📄 完成 N 条工单的归因分析",     ← RAG 日志                │
+│      "💡 生成 N 个行动建议"            ← Action 日志             │
 │    ],                                                             │
-│    processed_ids: [101, 102, 201, 202]  ← 累积所有已处理ID      │
+│    processed_ids: [..., TIK-053, TIK-054]  ← 累积已处理工单 ID  │
 │  }                                                               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 关键观察点
+### 2.1 关键观察
 
-1. **数据流转**：
-   - `raw_reviews` → `critical_reviews` → `rag_analysis_results` → `action_plans`
-   - 每个节点读取上一个节点的输出，生成自己的输出
+1. **数据流**  
+   `raw_reviews` → `critical_reviews` → `rag_analysis_results` → `action_plans`，节点之间只传递本批数据，不混入历史批次。
 
-2. **状态累积**：
-   - `logs` 和 `processed_ids` 是**累积的**，每个节点都会追加
-   - 其他字段是**替换的**，每个节点用新值覆盖旧值
+2. **状态累积**  
+   - `logs`、`processed_ids` 为**累积**，每次运行追加。  
+   - 其余字段为**覆盖**，只表示本批结果。
 
-3. **条件分支**：
-   - Filter 节点后，如果没有高危评论，直接结束，跳过 RAG 和 Action
+3. **条件分支**  
+   Filter 之后若无高危工单，直接 **END**，不执行 RAG 与 Action。
+
+4. **持久化**  
+   - Monitor：新工单写入 SQLite `reviews` 表。  
+   - Action：同表更新 `rag_result`、`action_plan`、`urgency_level`、`category`。
 
 ---
 
-## 3. `compile()` 函数到底做了什么？
+## 3. `compile()` 在做什么？
 
-### 3.1 简单理解
+### 3.1 直观理解
 
-`compile()` 就像**把设计图纸变成真正的机器**。
+`compile()` 把「图定义」变成「可执行的工作流」：
 
-- **设计图纸** = `StateGraph`（你定义的节点和边）
-- **真正的机器** = `graph_app`（可以运行的工作流）
+- **图定义** = `StateGraph(ReviewState)` + 节点与边  
+- **可执行工作流** = `graph_app`，能对初始状态做 `stream()` / `invoke()`
 
-### 3.2 详细解释
-
-让我们看看代码：
+### 3.2 代码位置
 
 ```python
 # src/graph.py
 
 def build_graph():
-    # 步骤 1: 创建"设计图纸"（StateGraph）
     workflow = StateGraph(ReviewState)
-    
-    # 步骤 2: 在图纸上"画节点"（添加节点函数）
+
     workflow.add_node("monitor", node_monitor)
     workflow.add_node("filter", node_filter)
     workflow.add_node("rag_analysis", node_rag_analysis)
     workflow.add_node("action_gen", node_action_gen)
-    
-    # 步骤 3: 在图纸上"画箭头"（添加边）
-    workflow.set_entry_point("monitor")  # 入口：从 monitor 开始
-    workflow.add_edge("monitor", "filter")  # monitor → filter
-    workflow.add_conditional_edges("filter", should_continue_analysis, {...})  # filter → (条件判断)
-    workflow.add_edge("rag_analysis", "action_gen")  # rag_analysis → action_gen
-    workflow.add_edge("action_gen", END)  # action_gen → 结束
-    
-    # 步骤 4: 编译图纸，变成可运行的机器
-    graph_app = workflow.compile()  # ← 这里！
-    
+
+    workflow.set_entry_point("monitor")
+    workflow.add_edge("monitor", "filter")
+    workflow.add_conditional_edges(
+        "filter",
+        should_continue_analysis,   # 有 critical_reviews 则走 rag_analysis，否则 end
+        { "rag_analysis": "rag_analysis", "end": END }
+    )
+    workflow.add_edge("rag_analysis", "action_gen")
+    workflow.add_edge("action_gen", END)
+
+    graph_app = workflow.compile()
     return graph_app
 ```
 
-### 3.3 `compile()` 内部做了什么？
+### 3.3 `compile()` 的作用
 
-**通俗理解**：
+- **校验图**：入口、连通性、条件边合法等。  
+- **生成执行计划**：从 monitor 开始，按边与条件决定下一步节点。  
+- **绑定 reducer**：状态合并按 `src/state.py` 的 `reducer` 执行。  
+- **得到可复用对象**：同一 `graph_app` 可多次 `stream(invoke)`，无需重新建图。
 
-1. **验证图纸**：检查节点和边是否合法（例如：是否有入口点？是否有孤立节点？）
-2. **优化路径**：计算最短路径，优化执行顺序
-3. **生成执行引擎**：创建一个可以"运行"的对象，这个对象知道：
-   - 从哪个节点开始
-   - 每个节点执行完后，下一步去哪里
-   - 如何合并状态（使用 `reducer`）
-   - 如何处理条件分支
-
-**技术细节**：
+### 3.4 使用方式示例
 
 ```python
-# compile() 内部大致做了这些事：
-
-def compile(self):
-    # 1. 验证图结构
-    self._validate_graph()
-    
-    # 2. 构建执行计划
-    execution_plan = self._build_execution_plan()
-    
-    # 3. 创建状态管理器（知道如何合并状态）
-    state_manager = StateManager(reducer=self.reducer)
-    
-    # 4. 创建可执行对象
-    executable_graph = ExecutableGraph(
-        nodes=self.nodes,           # 节点函数字典
-        edges=self.edges,           # 边定义
-        entry_point=self.entry_point,  # 入口点
-        state_manager=state_manager,    # 状态管理器
-        execution_plan=execution_plan  # 执行计划
-    )
-    
-    return executable_graph
-```
-
-### 3.4 使用编译后的 `graph_app`
-
-编译后，你可以这样使用：
-
-```python
-# 1. 创建初始状态
+# 1. 初始状态（可保留历史 processed_ids）
 initial_state = {
     "raw_reviews": [],
     "critical_reviews": [],
     "rag_analysis_results": [],
     "action_plans": [],
     "logs": [],
-    "processed_ids": []  # 或者保留历史ID
+    "processed_ids": []  # 或保留上一轮已处理工单 ID
 }
 
-# 2. 运行工作流（流式输出）
+# 2. 流式执行
 for event in graph_app.stream(initial_state):
-    # event 是一个字典，例如：
-    # {"monitor": {raw_reviews: [...], logs: [...]}}
-    # {"filter": {critical_reviews: [...], logs: [...]}}
-    # ...
     for node_name, node_output in event.items():
         print(f"节点 {node_name} 执行完成，输出: {node_output}")
 
-# 3. 或者一次性运行（非流式）
+# 3. 或一次性执行
 final_state = graph_app.invoke(initial_state)
 ```
-
-### 3.5 为什么需要 `compile()`？
-
-**类比**：
-- **不编译**：就像有一本"操作手册"，每次执行都要"翻书查找下一步"
-- **编译后**：就像把操作手册"背下来"，直接执行，更快更高效
-
-**实际好处**：
-1. **性能优化**：编译时可以优化执行路径
-2. **错误检查**：编译时发现图结构错误，而不是运行时
-3. **可复用**：编译一次，可以运行多次（`graph_app` 可以重复使用）
 
 ---
 
 ## 4. 总结
 
-### 4.1 关键概念回顾
+### 4.1 概念回顾
 
-1. **追加 vs 覆盖**：
-   - `logs` 和 `processed_ids` 是追加的（累积历史）
-   - 其他字段是覆盖的（当前批次的数据）
+1. **追加 vs 覆盖**  
+   - 追加：`logs`、`processed_ids`（保留历史、幂等）。  
+   - 覆盖：`raw_reviews`、`critical_reviews`、`rag_analysis_results`、`action_plans`（仅本批）。
 
-2. **数据流转**：
-   - Monitor → Filter → RAG → Action
-   - 每个节点读取上一个节点的输出，生成自己的输出
+2. **数据流**  
+   Monitor → Filter →（若有高危）→ RAG → Action；每步只依赖上一步的本批输出。
 
-3. **compile() 的作用**：
-   - 把"设计图纸"（StateGraph）变成"可运行的机器"（graph_app）
-   - 验证图结构、优化执行路径、创建执行引擎
+3. **compile()**  
+   将 `StateGraph` 编译为可执行的 `graph_app`，负责校验、执行计划和状态合并。
 
-### 4.2 下一步学习建议
+### 4.2 与当前架构的对应关系
 
-1. **运行代码**：在 `src/graph.py` 的 `build_graph()` 函数中打断点，观察 `compile()` 前后的对象变化
-2. **修改 reducer**：尝试修改 `src/state.py` 中的 `reducer`，看看不同合并策略的效果
-3. **添加节点**：尝试在 `src/graph.py` 中添加一个新节点，理解如何扩展工作流
+| 组件 | 说明 |
+|------|------|
+| **数据源** | `test_tickets_incremental.csv`（优先）或 `test_tickets.csv`，格式一致（如 Ticket_ID, User_Message） |
+| **持久化** | SQLite `reviews` 表，含 urgency_level、category，无 rating |
+| **Monitor** | 从 CSV 随机取本批工单，去重后入库并产出 raw_reviews |
+| **Filter** | B2B SaaS 高危标准 + 关键词兜底，产出 critical_reviews |
+| **RAG** | L2 智能体 + Tool 调用（ChromaDB 检索），产出归因结论与证据 |
+| **Action** | 生成行动建议并回写 DB（含 urgency_level、category） |
 
 ---
 
-**希望这份解释对你有帮助！如果还有疑问，欢迎继续提问。** 🚀
-
+**希望这份说明能帮助你理解当前项目的工作流与状态设计。** 🚀

@@ -5,7 +5,7 @@
 ## ✨ 功能特性
 
 - **智能语义聚类**：使用 LLM 自动发现用户反馈中的主要抱怨点
-- **RAG 归因分析**：基于产品说明书进行智能归因，识别问题根源
+- **RAG 归因分析**：基于知识库/SOP 进行智能归因，识别工单问题根源
 - **动态行动生成**：根据 RAG 分析结果自动生成针对性的行动计划
 - **增量巡检架构**：支持定时任务和手动触发的增量数据同步
 - **Mock 工作流集成**：模拟真实的工作流集成（Jira、Notion、Email 等）
@@ -52,14 +52,14 @@ export DASHSCOPE_API_KEY="your-dashscope-api-key"
 
 ### 构建知识库
 
-首先运行数据摄入脚本，将产品说明书向量化：
+首先运行知识摄入脚本，将知识库文本向量化：
 
 ```bash
 python injest.py
 ```
 
 这将：
-- 读取 `dji_spec.pdf`（产品说明书）
+- 读取 `saas_knowledge.txt`（知识库文本）
 - 进行文档切分和向量化
 - 保存到 `./chroma_db` 目录
 
@@ -83,15 +83,16 @@ reviewops/
 │   ├── graph.py             # 工作流图构建（LangGraph 组装）
 │   └── nodes/                # 工作流节点模块
 │       ├── __init__.py
-│       ├── monitor.py       # 监控节点（数据生成）
-│       ├── filter.py        # 筛选节点（高危评论筛选）
+│       ├── monitor.py       # 监控节点（工单输入）
+│       ├── filter.py        # 筛选节点（高危工单筛选）
 │       ├── rag.py           # RAG 分析节点（归因分析）
 │       └── action.py        # 行动生成节点
 ├── app.py                   # Streamlit UI（仅保留界面渲染逻辑）
 ├── injest.py                # 数据摄入脚本
 ├── requirements.txt         # Python 依赖
-├── user_reviews.csv         # 用户评论数据
-├── dji_spec.pdf             # 产品说明书（PDF）
+├── test_tickets.csv         # 工单数据（主数据源）
+├── test_tickets_incremental.csv  # 增量工单（每次巡检随机读取）
+├── saas_knowledge.txt       # 知识库文本（RAG 摄入）
 ├── chroma_db/               # 向量数据库（自动生成，已忽略）
 └── README.md                # 项目说明
 ```
@@ -124,17 +125,13 @@ RAG_MAX_CONTEXT_LENGTH=300         # 每个文档的最大长度
 RAG_MAX_DOCS_IN_CONTEXT=3         # 上下文中的最大文档数
 ```
 
-### 筛选节点配置
-
-```bash
-FILTER_RATING_THRESHOLD=3          # 高危评论评分阈值（低于此评分为高危）
-```
-
 ### 监控节点配置
 
 ```bash
-MONITOR_MIN_REVIEWS=2              # 每批最少评论数
-MONITOR_MUST_HAVE_POSITIVE=true    # 是否必须包含正面评论
+MONITOR_MIN_TICKETS=2                        # 每批最少工单数
+MONITOR_TICKETS_CSV_PATH=test_tickets.csv    # 主工单数据
+MONITOR_TICKETS_INCREMENTAL_CSV=test_tickets_incremental.csv  # 增量工单（每次巡检随机读取）
+MONITOR_USE_TICKETS_CSV=false                 # 为 true 时主数据源从 CSV 读取
 ```
 
 ### 行动生成配置
@@ -158,14 +155,14 @@ ACTION_DEFAULT_PRIORITY=Medium     # 默认优先级
 ## 📊 核心功能
 
 ### 1. 数据概览
-- 总评论数、平均评分、负面评价占比
+- 今日工单总数、L1 智能拦截率、P0 研发升级率
 - AI 每日简报
 - 增量数据统计
 
 ### 2. 智能巡检控制台
 - **增量巡检架构**：每次运行视为新的增量同步，数据累加而非重置
 - **实时工作流**：基于 LangGraph 的智能工作流执行
-- **RAG 归因分析**：自动提取负面评价，基于产品说明书进行 RAG 检索和归因
+- **RAG 归因分析**：筛选高危工单，基于知识库进行 RAG 检索和归因
 - **动态行动生成**：根据 RAG 归因结论自动生成行动计划
 - **历史记录管理**：Hero + History 分层展示，最新结果直接展示，历史记录可折叠查看
 
@@ -190,7 +187,7 @@ ACTION_DEFAULT_PRIORITY=Medium     # 默认优先级
 - **`src/graph.py`**：工作流图构建和路由逻辑
 - **`src/nodes/`**：各个工作流节点的实现
   - `monitor.py`：数据监控和生成
-  - `filter.py`：高危评论筛选
+  - `filter.py`：高危工单筛选
   - `rag.py`：RAG 归因分析
   - `action.py`：行动建议生成
 - **`app.py`**：仅包含 Streamlit UI 渲染逻辑
@@ -213,8 +210,8 @@ ACTION_DEFAULT_PRIORITY=Medium     # 默认优先级
 ## 📝 使用说明
 
 ### 1. 准备数据
-- 将用户评论数据放入 `user_reviews.csv`
-- 将产品说明书 PDF 放入项目根目录
+- 将工单数据放入 `test_tickets.csv` 或 `test_tickets_incremental.csv`
+- 将知识库文本放入 `saas_knowledge.txt` 并运行 `python injest.py`
 
 ### 2. 构建知识库
 ```bash

@@ -36,8 +36,8 @@ class TestNodeActionGen:
         mock_response = MagicMock()
         mock_response.content = '''{
             "action_type": "Jira Ticket",
-            "title": "修复避障功能问题",
-            "content": "用户反馈避障功能失效",
+            "title": "修复 API 401 鉴权问题",
+            "content": "用户反馈 create order API 返回 401，需排查 Token 与授权",
             "priority": "High"
         }'''
         mock_llm.invoke.return_value = mock_response
@@ -48,8 +48,8 @@ class TestNodeActionGen:
             "critical_reviews": [],
             "rag_analysis_results": [
                 {
-                    "review_id": "101_1234567890_5678",
-                    "review_text": "避障功能失效",
+                    "review_id": "TIK-054",
+                    "review_text": "调用 create order API 一直返回 401",
                     "conclusion": "⚠️ 需进一步调查",
                     "reason": "需要检查",
                     "evidence": "无"
@@ -64,7 +64,7 @@ class TestNodeActionGen:
         
         assert len(result["action_plans"]) > 0
         action = result["action_plans"][0]
-        assert action["review_id"] == "101_1234567890_5678"
+        assert action["review_id"] == "TIK-054"
         assert "action_type" in action
         assert "title" in action
         assert "content" in action
@@ -85,8 +85,8 @@ class TestNodeActionGen:
             "critical_reviews": [],
             "rag_analysis_results": [
                 {
-                    "review_id": "101_1234567890_5678",
-                    "review_text": "测试评论",
+                    "review_id": "TIK-055",
+                    "review_text": "测试工单内容",
                     "conclusion": "测试结论",
                     "reason": "测试原因",
                     "evidence": "测试证据"
@@ -96,13 +96,12 @@ class TestNodeActionGen:
             "logs": [],
             "processed_ids": []
         }
-        
+
         result = node_action_gen(state)
-        
-        # 应该使用默认值
+
         assert len(result["action_plans"]) > 0
         action = result["action_plans"][0]
-        assert action["review_id"] == "101_1234567890_5678"
+        assert action["review_id"] == "TIK-055"
         assert action["action_type"] == "Jira Ticket"  # 默认值
         assert action["priority"] == "Medium"  # 默认值
 

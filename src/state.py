@@ -6,13 +6,13 @@ from typing import TypedDict, List
 
 
 class ReviewState(TypedDict):
-    """工作流状态"""
-    raw_reviews: List[dict]  # 新评论
-    critical_reviews: List[dict]  # 筛选后的高危评论
+    """工作流状态（B2B 工单分诊）"""
+    raw_reviews: List[dict]  # 新工单
+    critical_reviews: List[dict]  # 筛选后的高危工单
     rag_analysis_results: List[dict]  # 归因结果
     action_plans: List[dict]  # 行动建议
     logs: List[str]  # 日志（使用 operator.add 追加）
-    processed_ids: List[str]  # 已处理的评论ID集合（用于幂等性去重）
+    processed_ids: List[str]  # 已处理的工单 ID 集合（用于幂等性去重）
 
 
 def reducer(state: ReviewState, update: ReviewState) -> ReviewState:

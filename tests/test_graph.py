@@ -11,7 +11,7 @@ class TestShouldContinueAnalysis:
     """测试条件路由函数"""
     
     def test_should_continue_with_critical_reviews(self):
-        """测试有高危评论时继续分析"""
+        """测试有高危工单时继续分析"""
         state: ReviewState = {
             "critical_reviews": [{"id": 1}],
             "raw_reviews": [],
@@ -24,7 +24,7 @@ class TestShouldContinueAnalysis:
         assert result == "rag_analysis"
     
     def test_should_end_without_critical_reviews(self):
-        """测试没有高危评论时结束"""
+        """测试没有高危工单时结束"""
         state: ReviewState = {
             "critical_reviews": [],
             "raw_reviews": [],

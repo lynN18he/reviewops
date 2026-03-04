@@ -15,106 +15,35 @@ from src.services.database import get_database
 
 def render_dashboard_metrics(calculate_metrics, generate_ai_brief):
     """
-    渲染顶部 Dashboard（数据概览 + AI 简报）
-    
-    Args:
-        calculate_metrics: 计算指标的函数
-        generate_ai_brief: 生成 AI 简报的函数
+    渲染顶部 Dashboard：SaaS 运维北极星指标 + 技术简报
     """
-    # 使用容器统一模块大小
     with st.container():
         st.markdown("## 📈 数据概览")
-        
-        # 计算指标 - 基于 session_state.all_reviews（SSOT）
         all_reviews = st.session_state.get('all_reviews', [])
-        
-        # 确保 all_reviews 是列表且不为空
         if not all_reviews:
-            all_reviews_df = pd.DataFrame(columns=['rating'])
+            all_reviews_df = pd.DataFrame()
         else:
-            # 创建 DataFrame，确保所有评论都被包含
             all_reviews_df = pd.DataFrame(all_reviews)
-            
-            # 调试：检查数据
-            if len(all_reviews_df) > 0:
-                # 确保 rating 列存在且为数值类型
-                if 'rating' not in all_reviews_df.columns:
-                    all_reviews_df['rating'] = 0
-                else:
-                    # 确保 rating 是数值类型，处理可能的字符串或其他类型
-                    all_reviews_df['rating'] = pd.to_numeric(all_reviews_df['rating'], errors='coerce').fillna(0)
-                
-                # 去重：基于 review_id 去重，避免重复计算
-                if 'review_id' in all_reviews_df.columns:
-                    all_reviews_df = all_reviews_df.drop_duplicates(subset=['review_id'], keep='last')
-        
-        # 计算指标（强制重新计算，不使用缓存）
-        # 重要：每次页面渲染时都重新计算，确保使用最新数据
-        total_reviews, avg_rating, negative_ratio = calculate_metrics(all_reviews_df)
-        
-        # 获取上次保存的值（用于计算增量）
-        prev_total = st.session_state.get('prev_total_reviews', 0)
-        prev_avg = st.session_state.get('prev_avg_rating', 0.0)
-        prev_negative_ratio = st.session_state.get('prev_negative_ratio', 0.0)
-        
-        # 计算 delta 值（只有当有历史数据且总数变化时才计算）
-        if prev_total > 0 and prev_total != total_reviews:
-            # 总数发生变化，说明有新数据，计算增量
-            avg_delta = avg_rating - prev_avg
-            negative_delta = negative_ratio - prev_negative_ratio
-        elif prev_total == 0:
-            # 首次运行，没有历史数据
-            avg_delta = None
-            negative_delta = None
-        else:
-            # 总数未变化，但可能数据有更新，仍然计算增量
-            avg_delta = avg_rating - prev_avg if prev_avg > 0 else None
-            negative_delta = negative_ratio - prev_negative_ratio if prev_negative_ratio > 0 else None
-        
-        # 保存当前值作为下次的基准（每次都要更新，确保下次计算时使用最新值）
-        # 重要：必须在每次渲染时更新，确保下次计算时使用最新值
-        st.session_state['prev_total_reviews'] = total_reviews
-        st.session_state['prev_avg_rating'] = avg_rating
-        st.session_state['prev_negative_ratio'] = negative_ratio
-        
-        # 三个指标卡片
+            if 'review_id' in all_reviews_df.columns:
+                all_reviews_df = all_reviews_df.drop_duplicates(subset=['review_id'], keep='last')
+        total_tickets, l1_rate, p0_rate = calculate_metrics(all_reviews_df, st.session_state)
+        prev_total = st.session_state.get('prev_total_tickets', 0)
+        prev_l1 = st.session_state.get('prev_l1_rate', 0.0)
+        prev_p0 = st.session_state.get('prev_p0_rate', 0.0)
+        st.session_state['prev_total_tickets'] = total_tickets
+        st.session_state['prev_l1_rate'] = l1_rate
+        st.session_state['prev_p0_rate'] = p0_rate
+        delta_total = f"本次新增 {st.session_state.get('last_run_increment', 0)} 条工单" if st.session_state.get('last_run_increment', 0) > 0 else None
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            # 动态显示增量（基于 last_run_increment）
-            delta_text = f"本次新增 {st.session_state.last_run_increment} 条" if st.session_state.last_run_increment > 0 else None
-            st.metric(
-                label="📝 总评论数",
-                value=f"{total_reviews}",
-                delta=delta_text,
-                delta_color="normal"
-            )
-        
+            st.metric(label="📋 今日工单总数", value=f"{total_tickets}", delta=delta_total, delta_color="normal")
         with col2:
-            # 显示平均评分，带增量变化
-            delta_text_avg = f"{avg_delta:+.1f}" if avg_delta is not None and abs(avg_delta) > 0.01 else None
-            st.metric(
-                label="⭐ 平均评分",
-                value=f"{avg_rating:.1f}",
-                delta=delta_text_avg,
-                delta_color="normal" if avg_delta is None or avg_delta >= 0 else "inverse"
-            )
-        
+            st.metric(label="🛡️ L1 智能拦截率", value=f"{l1_rate}%", delta=None, delta_color="normal")
         with col3:
-            # 显示负面评价占比，带增量变化
-            delta_text_negative = f"{negative_delta:+.1f}%" if negative_delta is not None and abs(negative_delta) > 0.01 else None
-            st.metric(
-                label="😔 负面评价占比",
-                value=f"{negative_ratio:.1f}%",
-                delta=delta_text_negative,
-                delta_color="inverse" if negative_delta is None or negative_delta <= 0 else "normal"
-            )
-
-    # AI 每日简报 - 使用容器统一大小
+            st.metric(label="🔺 P0 研发升级率", value=f"{p0_rate}%", delta=None, delta_color="normal")
     with st.container():
-        with st.expander("🤖 **AI 每日简报** - 点击展开", expanded=True):
-            ai_brief = generate_ai_brief(all_reviews_df, negative_ratio)
-            st.markdown(ai_brief)
+        with st.expander("🤖 **AI 技术简报** - 点击展开", expanded=True):
+            st.markdown(generate_ai_brief(all_reviews_df, None))
 
 
 def render_tab(api_key, calculate_metrics, generate_ai_brief):
@@ -188,7 +117,7 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
                                 # 数据同步：立即追加到 session_state.all_reviews（增量累加）
                                 st.session_state.all_reviews.extend(new_reviews)
                                 st.session_state.last_run_increment = len(new_reviews)
-                                st.write(f"📥 数据同步：已添加 {len(new_reviews)} 条新评论到全局状态（累计：{len(st.session_state.all_reviews)} 条）")
+                                st.write(f"📥 数据同步：已添加 {len(new_reviews)} 条新工单到全局状态（累计：{len(st.session_state.all_reviews)} 条）")
                         
                         # 检测 node_rag_analysis 产出的 rag_analysis_results（本次巡检的新增结果）
                         if node_name == "rag_analysis" and isinstance(node_output, dict) and "rag_analysis_results" in node_output:
@@ -303,14 +232,14 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
         if latest_actions:
             has_p0_risk = any(action.get('priority') == 'High' for action in latest_actions)
         if not has_p0_risk and latest_rag_results:
-            has_p0_risk = any('产品缺陷' in rag.get('conclusion', '') for rag in latest_rag_results)
+            has_p0_risk = any('缺陷' in rag.get('conclusion', '') for rag in latest_rag_results)
         
         # 显示标题和统计
         col_title, col_stats = st.columns([2, 1])
         with col_title:
             st.markdown("### 🚨 本次巡检发现 (Latest)")
         with col_stats:
-            st.caption(f"📅 {latest_time} · 新增 {latest_new_reviews} 条评论")
+            st.caption(f"📅 {latest_time} · 新增 {latest_new_reviews} 条工单")
         
         # 如果有 P0 级风险，使用 st.error 容器包裹增强警示感
         if has_p0_risk:

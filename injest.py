@@ -16,8 +16,9 @@ DASHSCOPE_API_KEY=your-dashscope-api-key
 
 import os
 import sys
+import shutil
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.vectorstores import Chroma
@@ -62,7 +63,7 @@ def get_embeddings():
 
 
 def ingest_documents(
-    pdf_path: str = "dji_spec.pdf",
+    text_path: str = "saas_knowledge.txt",
     persist_directory: str = "./chroma_db",
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
@@ -70,27 +71,33 @@ def ingest_documents(
     print("🚀 开始构建 RAG 知识库...")
 
     # 1) 检查文件
-    if not os.path.exists(pdf_path):
-        print(f"❌ 错误：找不到文件 {pdf_path}")
+    if not os.path.exists(text_path):
+        print(f"❌ 错误：找不到文件 {text_path}")
         sys.exit(1)
 
-    # 2) 加载 PDF
-    print(f"📄 正在读取 PDF: {pdf_path} ...")
-    loader = PyPDFLoader(pdf_path)
-    pages = loader.load()
-    print(f"✅ PDF 加载完成，共 {len(pages)} 页")
+    # 2) 清空旧向量库，避免数据污染
+    if os.path.isdir(persist_directory):
+        print(f"🗑️ 清空旧向量库: {persist_directory} ...")
+        shutil.rmtree(persist_directory)
+        print("✅ 已清空")
 
-    # 3) 语义切分
+    # 3) 加载纯文本
+    print(f"📄 正在读取文本: {text_path} ...")
+    loader = TextLoader(text_path, encoding="utf-8")
+    documents = loader.load()
+    print(f"✅ 文本加载完成，共 {len(documents)} 个文档")
+
+    # 4) 语义切分（保持原有切分逻辑）
     print("✂️ 正在进行语义切分...")
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         add_start_index=True,
     )
-    chunks = splitter.split_documents(pages)
+    chunks = splitter.split_documents(documents)
     print(f"✅ 切分完成，共生成 {len(chunks)} 个 chunks")
 
-    # 4) 向量化并写入 ChromaDB
+    # 5) 向量化并写入 ChromaDB
     print("🔑 正在检查 API Key ...")
     embeddings = get_embeddings()
 

@@ -23,34 +23,30 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
     reason = rag_result.get("reason", "")
     evidence = rag_result.get("evidence", "")
     
-    # 根据结论类型设置颜色、图标和视觉样式
-    if "产品缺陷" in conclusion or "⚠️" in conclusion or "需进一步调查" in conclusion:
-        # 情况 A：产品缺陷
-        conclusion_type = "产品缺陷"
+    # 根据结论类型设置颜色、图标和视觉样式（B2B 工单场景）
+    if "缺陷" in conclusion or "⚠️" in conclusion or "需进一步调查" in conclusion:
+        conclusion_type = "系统缺陷"
         card_style = "error"
-        title_prefix = "🔴 [产品缺陷]"
+        title_prefix = "🔴 [系统缺陷]"
         container_func = st.error
-    elif "用户" in conclusion or "❓" in conclusion or "用户使用问题" in conclusion:
-        # 情况 B：用户误解/操作不当
-        conclusion_type = "用户误解"
+    elif "用户" in conclusion or "❓" in conclusion or "用户使用问题" in conclusion or "配置" in conclusion:
+        conclusion_type = "用户/配置问题"
         card_style = "warning"
-        title_prefix = "⚠️ [用户误解]"
+        title_prefix = "⚠️ [用户/配置问题]"
         container_func = st.warning
-    elif "✅" in conclusion or "产品已知局限" in conclusion:
-        # 情况 C：产品已知局限
-        conclusion_type = "产品已知局限"
+    elif "✅" in conclusion or "已知局限" in conclusion:
+        conclusion_type = "已知局限"
         card_style = "info"
-        title_prefix = "ℹ️ [产品已知局限]"
+        title_prefix = "ℹ️ [已知局限]"
         container_func = st.info
     else:
-        # 其他情况
         conclusion_type = "其他问题"
         card_style = "info"
         title_prefix = "🔵 [其他问题]"
         container_func = st.info
     
-    # 提取问题标题
-    title_keywords = ["续航", "避障", "云台", "抖动", "电池", "图传", "GPS", "虚标", "硬件", "自检"]
+    # 提取问题标题（B2B 电商/物流 SaaS 场景）
+    title_keywords = ["API", "Webhook", "401", "403", "HMAC", "同步", "发版", "授权", "限流", "订单", "物流", "Token", "Jira"]
     title = "未知问题"
     for keyword in title_keywords:
         if keyword in review_text:
@@ -68,7 +64,7 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
         # 提取图标和文本（title_prefix 已经包含图标，不需要重复显示）
         # 例如：title_prefix = "🔴 [产品缺陷]" 或 "ℹ️ [产品已知局限]"
         st.markdown(f"### {title_prefix} {title}")
-        st.caption(f"📋 评论ID: {review_id}")
+        st.caption(f"📋 工单ID: {review_id}")
         
         st.markdown("---")  # 添加分隔线，更清晰
         
@@ -88,7 +84,7 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
         with col_mid:
             st.markdown("**📖 RAG 证据**")
             st.markdown("")  # 小间距
-            if evidence and evidence not in ["未在说明书中找到相关描述", "向量库未初始化，使用基础分析", ""]:
+            if evidence and evidence not in ["未在知识库中找到相关描述", "未检索到相关文档", "向量库未初始化，使用基础分析", ""]:
                 if len(evidence) > 500:
                     with st.expander("📄 查看完整证据", expanded=False):
                         st.markdown(evidence)
@@ -97,10 +93,10 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
                 else:
                     with st.container():
                         container_func(evidence)
-            elif evidence == "未在说明书中找到相关描述":
-                st.warning("⚠️ 未在说明书中找到相关描述")
+            elif evidence == "未在知识库中找到相关描述" or evidence == "未检索到相关文档":
+                st.warning("⚠️ 未在知识库中检索到相关描述")
             else:
-                st.warning("⚠️ 向量检索未启用或失败")
+                st.warning("⚠️ 检索未启用或失败")
         
         with col_right:
             st.markdown("**🤖 AI 判定**")
@@ -162,7 +158,7 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
                 if action_type == "Jira Ticket":
                     if st.button("🚀 推送至 Jira", key=f"action_jira_{unique_key}", use_container_width=True, type="primary"):
                         import random
-                        ticket_id = f"DJI-2025-{random.randint(1000, 9999)}"
+                        ticket_id = f"RO-2025-{random.randint(1000, 9999)}"
                         st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
                 elif action_type == "Doc Update":
                     if st.button("📝 创建 Notion Task", key=f"action_notion_{unique_key}", use_container_width=True):
@@ -187,7 +183,7 @@ def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0):
                 )
                 action_title_manual = st.text_input(
                     "标题",
-                    value=f"处理 {review_id} 的问题",
+                    value=f"处理工单 {review_id} 的问题",
                     key=f"manual_action_title_{unique_key}"
                 )
                 action_content_manual = st.text_area(

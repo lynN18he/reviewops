@@ -126,7 +126,7 @@ def node_rag_analysis(state: ReviewState) -> ReviewState:
     critical_reviews = state.get("critical_reviews", [])
 
     if not critical_reviews:
-        log_message = "⚠️ RAG 分析节点：无高危评论需要分析"
+        log_message = "⚠️ RAG 分析节点：无高危工单需要分析"
         return {
             "rag_analysis_results": [],
             "logs": [log_message],
@@ -162,7 +162,7 @@ def node_rag_analysis(state: ReviewState) -> ReviewState:
                 "evidence": "",
             })
 
-    log_message = f"📄 RAG 分析节点：完成 {len(rag_results)} 条评论的归因分析（已使用 Tool 调用）"
+    log_message = f"📄 RAG 分析节点：完成 {len(rag_results)} 条工单的归因分析（已使用 Tool 调用）"
     return {
         "rag_analysis_results": rag_results,
         "logs": [log_message],

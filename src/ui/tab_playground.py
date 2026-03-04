@@ -1,7 +1,6 @@
 """
 单条归因实验室 Tab
-包含单条评论输入、归因分析（Tool 调用）、行动建议生成等所有逻辑
-原 ChromaDB RAG 已注释，改用 Mock Tools 进行 MVP 测试。
+包含单条工单/用户反馈输入、归因分析（Tool 调用）、行动建议生成等逻辑。
 """
 
 import streamlit as st
@@ -133,7 +132,7 @@ def generate_action_plan(topic_name: str, rag_conclusion: str, user_complaints: 
 
 **决策规则：**
 - 如果归因是 **产品缺陷/Bug** -> 生成 Jira Ticket，包含标题、描述、复现步骤、优先级
-- 如果归因是 **用户误操作/文档不清** -> 生成 Doc Update（更新说明书）或 Email Draft（客服话术）
+- 如果归因是 **用户误操作/文档不清** -> 生成 Doc Update（更新文档/SOP）或 Email Draft（客服话术）
 - 如果归因是 **物流/服务问题** -> 生成 Email Draft（给物流商或客服主管）
 - 如果归因是 **复杂问题需要讨论** -> 生成 Meeting（会议安排）
 
@@ -141,7 +140,7 @@ def generate_action_plan(topic_name: str, rag_conclusion: str, user_complaints: 
 
 {{
   "action_type": "Jira Ticket" | "Doc Update" | "Email Draft" | "Meeting",
-  "title": "行动的简短标题（如：创建 P0 级 Jira 工单：修复云台抖动）",
+  "title": "行动的简短标题（如：创建 P0 级 Jira 工单：修复 API 401 授权问题）",
   "content": "行动的详细内容（如工单的 Description 或邮件的正文，要具体可执行）",
   "priority": "High" | "Medium" | "Low"
 }}
@@ -223,12 +222,11 @@ def render_tab(api_key):
     Args:
         api_key: DashScope API Key
     """
-    st.markdown("### 🔬 单条评论归因分析")
-    st.caption("输入单条用户评论，由 L2 技术支持智能体调用工具（发版记录/已知缺陷/API SOP）进行归因分析")
-    
-    # 单条评论输入
+    st.markdown("### 🔬 单条工单归因分析")
+    st.caption("输入单条用户反馈/工单内容，由 L2 技术支持智能体调用工具（发版记录/已知缺陷/API SOP）进行归因分析")
+
     user_input = st.text_area(
-        "📝 请输入用户评论",
+        "📝 请输入工单内容或用户反馈",
         placeholder="例如：昨天还好好的，今天早上 USPS 的轨迹全不更新了！",
         height=100,
         key="manual_review_input"
@@ -239,7 +237,7 @@ def render_tab(api_key):
     if analyze_button:
         # 检查输入
         if not user_input or not user_input.strip():
-            st.warning("⚠️ 请输入用户评论")
+            st.warning("⚠️ 请输入工单内容或用户反馈")
             st.stop()
         
         # 检查 API Key
@@ -270,7 +268,7 @@ def render_tab(api_key):
         col_left, col_right = st.columns([1, 1])
         
         with col_left:
-            st.markdown("##### 💬 用户评论")
+            st.markdown("##### 💬 用户反馈")
             st.info(user_input)
             
             st.markdown("##### 🤖 AI 判定结论")
@@ -308,12 +306,11 @@ def render_tab(api_key):
                         if i < len(source_docs):
                             st.markdown("---")
         
-        # 生成单条评论的 Action Plan
         st.markdown("---")
         st.markdown("### 💡 行动建议")
-        
+
         action_plan = generate_action_plan(
-            topic_name="单条评论分析",
+            topic_name="单条工单分析",
             rag_conclusion=conclusion,
             user_complaints=[user_input],
             llm=llm
@@ -354,7 +351,7 @@ def render_tab(api_key):
                 # Mock 按钮
                 if action_type == "Jira Ticket":
                     if st.button("🚀 推送至 Jira", key="manual_jira", use_container_width=True):
-                        ticket_id = f"DJI-2025-{random.randint(800, 999)}"
+                        ticket_id = f"RO-2025-{random.randint(800, 999)}"
                         st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
                 elif action_type == "Doc Update":
                     if st.button("📝 创建 Notion Task", key="manual_notion", use_container_width=True):
@@ -366,5 +363,5 @@ def render_tab(api_key):
                     if st.button("📅 创建会议", key="manual_meeting", use_container_width=True):
                         st.toast("✅ 会议已创建！", icon="🎉")
     else:
-        st.info("👆 请输入用户评论并点击「开始归因分析」按钮")
+        st.info("👆 请输入工单内容并点击「开始归因分析」按钮")
 

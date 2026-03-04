@@ -79,12 +79,8 @@ class TestFilterConfig:
         """测试关键词列表"""
         assert isinstance(FilterConfig.KEYWORDS, list)
         assert len(FilterConfig.KEYWORDS) > 0
-        assert "故障" in FilterConfig.KEYWORDS
-        assert "失效" in FilterConfig.KEYWORDS
-    
-    def test_rating_threshold_default(self):
-        """测试评分阈值默认值"""
-        assert FilterConfig.RATING_THRESHOLD == 3
+        assert "502" in FilterConfig.KEYWORDS
+        assert "白屏" in FilterConfig.KEYWORDS
 
 
 class TestMonitorConfig:
@@ -92,8 +88,8 @@ class TestMonitorConfig:
     
     def test_default_values(self):
         """测试默认值"""
-        assert MonitorConfig.MIN_REVIEWS_PER_BATCH == 2
-        assert MonitorConfig.MUST_HAVE_POSITIVE is True
+        assert MonitorConfig.MIN_TICKETS_PER_BATCH == 2
+        assert MonitorConfig.TICKETS_INCREMENTAL_CSV == "test_tickets_incremental.csv"
 
 
 class TestActionConfig:

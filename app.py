@@ -21,125 +21,110 @@ from src.ui.tab_playground import render_tab as render_playground_tab
 apply_page_config()
 apply_custom_styles()
 
-# ==================== 数据加载 ====================
-@st.cache_data(ttl=60)  # 60秒缓存，便于开发
-def load_reviews():
-    """加载用户评论数据"""
-    df = pd.read_csv("user_reviews.csv")
-    # 确保有 review_id 列（如果没有，使用 user_id 或创建）
-    if 'review_id' not in df.columns:
-        if 'user_id' in df.columns:
-            df['review_id'] = df['user_id']
-        else:
-            df['review_id'] = range(1, len(df) + 1)
+# ==================== 数据加载（B2B SaaS 工单） ====================
+@st.cache_data(ttl=60)
+def load_tickets():
+    """加载工单数据：test_tickets.csv，表头 Ticket_ID, User_Message, True_Category, Expected_Tool。"""
+    try:
+        df = pd.read_csv("test_tickets.csv", encoding="utf-8")
+    except Exception:
+        return pd.DataFrame()
+    if df.empty or "User_Message" not in df.columns:
+        return pd.DataFrame()
+    # 映射为与 Graph/State 兼容的字段：review_id, review_text, user_id, timestamp, urgency_level, category
+    if "Ticket_ID" in df.columns:
+        df = df.rename(columns={"Ticket_ID": "review_id", "User_Message": "review_text"})
+    else:
+        df["review_id"] = df.index.astype(str).map(lambda i: f"TIK-{i}")
+        df = df.rename(columns={"User_Message": "review_text"})
+    df["user_id"] = df["review_id"].apply(lambda x: f"ticket_{x}")
+    df["urgency_level"] = None
+    df["category"] = None
+    df["timestamp"] = ""
+    # 保留 True_Category, Expected_Tool 供后续扩展
     return df
 
-# 清除缓存以便重新加载数据
-load_reviews.clear()
+load_tickets.clear = getattr(load_tickets, "clear", lambda: None)
 
-# 加载数据
-reviews_df = load_reviews()
+# 加载工单数据（单条/批量跑测时 User_Message 作为 query 传给 Agent）
+tickets_df = load_tickets()
 
-# ==================== 工具函数 ====================
-def calculate_metrics(df):
-    """计算关键指标 - 确保所有评论（包括正面和负面）都被正确统计"""
-    # 处理空 DataFrame
-    if df.empty or len(df) == 0:
-        return 0, 0.0, 0.0
-    
-    total_reviews = len(df)
-    
-    # 计算平均评分，处理 NaN 值
-    # 重要：必须计算所有评论的平均分，包括正面、负面和中性评论
-    if 'rating' not in df.columns:
-        avg_rating = 0.0
-    else:
-        # 确保 rating 是数值类型
-        rating_series = pd.to_numeric(df['rating'], errors='coerce')
-        # 过滤掉 NaN 值后计算平均值（包括所有有效评分）
-        valid_ratings = rating_series.dropna()
-        if len(valid_ratings) > 0:
-            # 计算所有有效评分的平均值（包括 1-5 星的所有评分）
-            avg_rating = float(valid_ratings.mean())
-        else:
-            avg_rating = 0.0
-    
-    # 计算负面评价占比，处理除零情况
-    # 重要：负面评价占比 = 负面评论数 / 总评论数 * 100
-    # 总评论数包括所有评论（正面、负面、中性）
-    if total_reviews == 0:
-        negative_ratio = 0.0
-    else:
-        if 'rating' in df.columns:
-            # 确保 rating 是数值类型后再比较
-            rating_series = pd.to_numeric(df['rating'], errors='coerce')
-            # 负面评价：rating < 3（1星和2星）
-            # 注意：这里只计算负面评论数，分母是总评论数（包括正面评论）
-            negative_count = len(rating_series[rating_series < 3].dropna())
-        else:
-            negative_count = 0
-        # 负面占比 = 负面评论数 / 总评论数 * 100
-        negative_ratio = (negative_count / total_reviews) * 100
-    
-    return total_reviews, avg_rating, negative_ratio
+# ==================== 工具函数（SaaS 运维北极星指标） ====================
+def calculate_metrics(df, session_state=None):
+    """
+    计算看板指标：今日工单总数、L1 智能拦截率、P0 研发升级率。
+    兼容传入 session_state 以根据巡检结果动态计算拦截率/升级率；否则使用 Mock 值。
+    """
+    total_tickets = 0 if df.empty else len(df)
+    if total_tickets == 0:
+        return total_tickets, 0.0, 0.0
+
+    # 尝试从 session_state 或历史结果计算 L1 拦截率、P0 升级率
+    l1_rate, p0_rate = 72.5, 12.3  # 默认 Mock
+    if session_state is not None:
+        all_rag = session_state.get("incremental_rag_results", []) or session_state.get("latest_rag_results", [])
+        all_actions = session_state.get("incremental_action_plans", [])
+        # 从数据库补充：有 rag_result/action_plan 的历史记录
+        try:
+            from src.services.database import get_database
+            db = get_database()
+            history = db.get_history(limit=500)
+            for r in history:
+                rag = r.get("rag_result")
+                action = r.get("action_plan")
+                if isinstance(rag, dict) and rag:
+                    all_rag = all_rag + [rag]
+                if isinstance(action, dict) and action:
+                    all_actions = all_actions + [action]
+        except Exception:
+            pass
+        total_analyzed = len(all_rag) or 1
+        if total_analyzed > 0:
+            # L1 拦截：结论含「用户」「配置」「已知局限」等视为被拦截
+            deflected = sum(
+                1 for r in all_rag
+                if isinstance(r, dict) and any(
+                    k in (r.get("conclusion") or "")
+                    for k in ("用户", "配置", "已知局限", "✅", "用户使用问题")
+                )
+            )
+            l1_rate = round((deflected / total_analyzed) * 100, 1)
+            # P0 升级：行动类型为 Jira Ticket 视为升级研发
+            jira_count = sum(
+                1 for a in all_actions
+                if isinstance(a, dict) and (a.get("action_type") or "").strip() == "Jira Ticket"
+            )
+            p0_rate = round((jira_count / total_analyzed) * 100, 1)
+    return total_tickets, l1_rate, p0_rate
 
 
-def generate_ai_brief(df, negative_ratio):
-    """生成 AI 每日简报（基于实际用户反馈数据）"""
-    # 确保数据一致性：正面 + 负面 + 中性 = 总数
-    negative_count = len(df[df['rating'] < 3])  # rating < 3: 负面
-    positive_count = len(df[df['rating'] >= 4])  # rating >= 4: 正面
-    neutral_count = len(df[df['rating'] == 3])   # rating == 3: 中性
-    
-    # 验证数据一致性
-    total_calculated = positive_count + negative_count + neutral_count
-    if total_calculated != len(df):
-        # 如果数据不一致，重新计算（处理可能的 NaN 或其他异常值）
-        negative_count = len(df[df['rating'] < 3].dropna())
-        positive_count = len(df[df['rating'] >= 4].dropna())
-        neutral_count = len(df[df['rating'] == 3].dropna())
-    
-    # 如果已有分析结果，使用它；否则使用通用描述
-    if 'analysis_topics' in st.session_state:
-        topics = st.session_state['analysis_topics']
-        top_issues = [t.get('topic', '') for t in topics[:3]]
-        top_issue_text = "、".join([f"**{issue}**" for issue in top_issues[:2] if issue])
-    else:
-        top_issue_text = "功能使用问题"
-    
-    # 构建反馈统计文本（根据是否有中性评价决定显示格式）
-    if neutral_count > 0:
-        feedback_summary = f"本周共收集 **{len(df)}** 条用户反馈，其中正向评价 **{positive_count}** 条，负向评价 **{negative_count}** 条，中性评价 **{neutral_count}** 条"
-    else:
-        feedback_summary = f"本周共收集 **{len(df)}** 条用户反馈，其中正向评价 **{positive_count}** 条，负向评价 **{negative_count}** 条"
-    
-    brief = f"""
-### 📊 舆情趋势分析
+def generate_ai_brief(df, _unused=None):
+    """生成 B2B SaaS 技术简报（技术支持主管视角）。"""
+    total = 0 if df.empty else len(df)
+    brief = """
+### 📋 技术简报
 
-**整体情绪：** {"😊 正向为主" if negative_ratio < 30 else "😐 中性偏负" if negative_ratio < 50 else "😟 负向预警"}
+**整体系统健康度：** 今日工单量处于正常区间，核心服务（订单同步、物流轨迹）无大面积故障报告。
 
-**核心发现：**
-- {feedback_summary}
-- 用户反馈主要集中在 **产品功能限制说明不清** 和 **实际性能与宣传参数不符** 两大方面
-- 当前最突出的问题类型：{top_issue_text if top_issue_text else "功能使用问题"}
+**核心故障发现：**
+- 今日共处理 **{total}** 条工单。
+- **Shopify 订单同步**：部分工单集中反馈 401/Token 失效，多为商家侧重置 API 后未在系统更新，已由 SOP 引导重新授权。
+- **物流轨迹**：偶发 USPS 状态卡在 “In Transit”，与近期发版限流策略相关，已记录 JIRA 跟进。
 
-**舆情预警：**
-- 🔴 新手用户对产品限制条件的认知不足，导致使用体验差
-- 🟡 硬件质量问题影响用户对产品品质的信任
-- 🟡 说明书可读性不足，用户难以快速理解关键限制条件
+**拦截成效：**
+- 多数问题集中在 **Token 授权错误**、**Webhook 配置**，已由知识库与 SOP 成功拦截，无需升级研发。
+- 建议继续强化 L1 话术与自助排查文档，降低重复类工单占比。
 
-**建议关注：**
-- 优化产品说明书，突出关键限制条件
-- 加强新手引导，在产品首次使用时主动提示重要限制
-- 关注硬件品控，减少质量问题
-"""
+**研发关注建议：**
+- 关注 JIRA-1042（阿拉伯语地址解析超时）排期与发版节奏。
+- 监控 429 限流相关反馈，评估限流阈值是否需按客户分层调整。
+""".format(total=total)
     return brief
 
 
 def extract_product_name():
-    """从 CSV 文件名或数据中提取产品名称"""
-    # 简单实现：从文件名推断
-    return "DJI Mini 4 Pro"
+    """从业务场景推断产品/服务名称"""
+    return "B2B 电商履约与物流 SaaS"
 
 
 # ==================== 侧边栏 ====================
@@ -152,7 +137,7 @@ with st.sidebar:
     # 产品信息
     product_name = extract_product_name()
     st.markdown("### 📦 当前分析产品")
-    st.info(f"**{product_name}**\n\n产品说明书已向量化存储")
+    st.info(f"**{product_name}**\n\n知识库已向量化存储（saas_knowledge.txt）")
     
     st.divider()
     
@@ -185,8 +170,8 @@ with st.sidebar:
     
     # 数据概览
     st.markdown("### 📊 数据源")
-    st.caption(f"📄 评论数据: `user_reviews.csv`")
-    st.caption(f"📋 产品说明: `dji_spec.pdf` (已向量化)")
+    st.caption(f"📄 工单数据: `test_tickets.csv`")
+    st.caption(f"📋 知识库: `saas_knowledge.txt` (已向量化)")
     st.caption(f"💾 向量库: `./chroma_db`")
     st.caption(f"🕐 最后更新: 2025-01-15")
 
@@ -198,7 +183,7 @@ st.markdown("**用户反馈决策中台** · 让产品决策有据可依")
 st.markdown("---")
 
 # ==================== 全局状态初始化 ====================
-init_session_state(reviews_df, calculate_metrics)
+init_session_state(tickets_df, calculate_metrics)
 
 # ==================== 顶部 Dashboard ====================
 render_dashboard_metrics(calculate_metrics, generate_ai_brief)
