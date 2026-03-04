@@ -16,7 +16,6 @@ from src.ui.styles import apply_page_config, apply_custom_styles
 from src.ui.state import init_session_state
 from src.ui.tab_dashboard import render_tab as render_dashboard_tab, render_dashboard_metrics
 from src.ui.tab_playground import render_tab as render_playground_tab
-from src.graph import graph_app
 
 # ==================== 页面配置 ====================
 apply_page_config()
@@ -181,24 +180,6 @@ with st.sidebar:
             st.success("✅ API Key 已配置（临时，仅本次会话有效）")
         else:
             st.warning("⚠️ 请配置 API Key 以启用 RAG 分析功能")
-    
-    st.divider()
-
-    # LangGraph 工作流可视化
-    with st.expander("📐 LangGraph 工作流图", expanded=False):
-        try:
-            g = graph_app.get_graph()
-            mermaid_code = g.draw_mermaid()
-            st.caption("将下方代码复制到 [mermaid.live](https://mermaid.live) 可查看流程图")
-            st.code(mermaid_code, language="mermaid")
-            try:
-                ascii_art = g.draw_ascii()
-                st.caption("ASCII 预览")
-                st.code(ascii_art, language="text")
-            except ImportError:
-                st.caption("安装 grandalf 后可显示 ASCII 图：`pip install grandalf`")
-        except Exception as e:
-            st.warning(f"无法加载图：{e}")
     
     st.divider()
     
