@@ -9,7 +9,7 @@ import streamlit as st
 def apply_page_config():
     """应用页面配置"""
     st.set_page_config(
-        page_title="ReviewOps · 用户反馈决策中台",
+        page_title="ReviewOps · B2B SaaS 研发智能问诊中台",
         page_icon="🔬",
         layout="wide",
         initial_sidebar_state="expanded"

@@ -1,4 +1,4 @@
-# ReviewOps - 用户反馈决策中台
+# ReviewOps - B2B SaaS 研发智能问诊中台
 
 一个基于 RAG + LLM 的 B端 SaaS 原型，帮助产品经理分析用户反馈并生成可执行的行动建议。
 
@@ -78,7 +78,7 @@ reviewops/
 ├── src/                      # 核心业务逻辑模块
 │   ├── __init__.py
 │   ├── config.py            # 配置管理（集中管理所有配置参数）
-│   ├── state.py             # 状态定义（ReviewState 和 reducer）
+│   ├── state.py             # 状态定义（TicketState 和 reducer）
 │   ├── utils.py             # 工具函数（LLM 初始化等）
 │   ├── graph.py             # 工作流图构建（LangGraph 组装）
 │   └── nodes/                # 工作流节点模块
@@ -248,7 +248,7 @@ streamlit run app.py
 ### 添加新节点
 
 1. 在 `src/nodes/` 目录下创建新文件，例如 `custom_node.py`
-2. 实现节点函数，接受 `ReviewState` 并返回 `ReviewState`
+2. 实现节点函数，接受 `TicketState` 并返回 `TicketState`
 3. 在 `src/graph.py` 中导入并添加到工作流图
 
 ### 修改配置

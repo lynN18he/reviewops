@@ -39,7 +39,7 @@
 - 如果工作流中断或出错，可以从最近的检查点恢复
 
 **内容**：
-- `ReviewState` 的完整状态（`raw_reviews`, `critical_reviews`, `rag_analysis_results` 等）
+- `TicketState` 的完整状态（`incr_tickets`, `critical_tickets`, `rag_analysis_results` 等）
 - 当前执行到哪个节点
 - 已处理的 ID 集合（`processed_ids`）
 
@@ -188,7 +188,7 @@ rm .langgraph_api/.langgraph_checkpoint.*.pckl
 - 只能被 Python 读取（不是人类可读的）
 
 **为什么使用 Pickle？**
-- `ReviewState` 包含复杂的嵌套结构（列表、字典等）
+- `TicketState` 包含复杂的嵌套结构（列表、字典等）
 - Pickle 可以完整保存这些结构，包括类型信息
 
 ---

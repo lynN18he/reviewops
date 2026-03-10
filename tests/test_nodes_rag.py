@@ -5,7 +5,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from src.nodes.rag import node_rag_analysis
-from src.state import ReviewState
+from src.state import TicketState
 
 
 class TestNodeRagAnalysis:
@@ -13,9 +13,9 @@ class TestNodeRagAnalysis:
 
     def test_node_rag_empty_critical_tickets(self):
         """测试空高危工单列表"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -34,7 +34,7 @@ class TestNodeRagAnalysis:
         mock_llm = MagicMock()
         mock_response = MagicMock()
         mock_response.content = """{
-            "review_id": "TIK-054",
+            "ticket_id": "TIK-054",
             "conclusion": "✅ 配置问题，建议按 SOP 重新授权",
             "reason": "知识库/SOP 中有说明",
             "evidence": "相关证据"
@@ -42,12 +42,12 @@ class TestNodeRagAnalysis:
         mock_llm.invoke.return_value = mock_response
         mock_init_llm.return_value = mock_llm
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [
                 {
-                    "review_id": "TIK-054",
-                    "review_text": "调用 create order API 一直返回 401 Unauthorized",
+                    "ticket_id": "TIK-054",
+                    "ticket_content": "调用 create order API 一直返回 401 Unauthorized",
                 }
             ],
             "rag_analysis_results": [],
@@ -60,7 +60,7 @@ class TestNodeRagAnalysis:
 
         assert len(result["rag_analysis_results"]) > 0
         rag_result = result["rag_analysis_results"][0]
-        assert rag_result["review_id"] == "TIK-054"
+        assert rag_result["ticket_id"] == "TIK-054"
         assert "conclusion" in rag_result
         assert "reason" in rag_result
         assert "evidence" in rag_result
@@ -74,12 +74,12 @@ class TestNodeRagAnalysis:
         mock_llm.invoke.return_value = mock_response
         mock_init_llm.return_value = mock_llm
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [
                 {
-                    "review_id": "TIK-055",
-                    "review_text": "批量查询接口报 429",
+                    "ticket_id": "TIK-055",
+                    "ticket_content": "批量查询接口报 429",
                 }
             ],
             "rag_analysis_results": [],

@@ -19,14 +19,14 @@ def render_dashboard_metrics(calculate_metrics, generate_ai_brief):
     """
     with st.container():
         st.markdown("## 📈 数据概览")
-        all_reviews = st.session_state.get('all_reviews', [])
-        if not all_reviews:
-            all_reviews_df = pd.DataFrame()
+        all_tickets = st.session_state.get('all_tickets', [])
+        if not all_tickets:
+            all_tickets_df = pd.DataFrame()
         else:
-            all_reviews_df = pd.DataFrame(all_reviews)
-            if 'review_id' in all_reviews_df.columns:
-                all_reviews_df = all_reviews_df.drop_duplicates(subset=['review_id'], keep='last')
-        total_tickets, l1_rate, p0_rate = calculate_metrics(all_reviews_df, st.session_state)
+            all_tickets_df = pd.DataFrame(all_tickets)
+            if 'ticket_id' in all_tickets_df.columns:
+                all_tickets_df = all_tickets_df.drop_duplicates(subset=['ticket_id'], keep='last')
+        total_tickets, l1_rate, p0_rate, delta_l1, delta_p0 = calculate_metrics(all_tickets_df, st.session_state)
         prev_total = st.session_state.get('prev_total_tickets', 0)
         prev_l1 = st.session_state.get('prev_l1_rate', 0.0)
         prev_p0 = st.session_state.get('prev_p0_rate', 0.0)
@@ -38,12 +38,12 @@ def render_dashboard_metrics(calculate_metrics, generate_ai_brief):
         with col1:
             st.metric(label="📋 今日工单总数", value=f"{total_tickets}", delta=delta_total, delta_color="normal")
         with col2:
-            st.metric(label="🛡️ L1 智能拦截率", value=f"{l1_rate}%", delta=None, delta_color="normal")
+            st.metric(label="🛡️ L1 智能拦截率", value=f"{l1_rate}%", delta=delta_l1, delta_color="normal")
         with col3:
-            st.metric(label="🔺 P0 研发升级率", value=f"{p0_rate}%", delta=None, delta_color="normal")
+            st.metric(label="🔺 P0 研发升级率", value=f"{p0_rate}%", delta=delta_p0, delta_color="inverse")
     with st.container():
         with st.expander("🤖 **AI 技术简报** - 点击展开", expanded=True):
-            st.markdown(generate_ai_brief(all_reviews_df, None))
+            st.markdown(generate_ai_brief(all_tickets_df, total_tickets))
 
 
 def render_tab(api_key, calculate_metrics, generate_ai_brief):
@@ -85,12 +85,15 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
             
             # 初始化状态（增量巡检：保留已处理的ID）
             initial_state = {
-                "raw_reviews": [],
-                "critical_reviews": [],
+                "incr_tickets": [],
+                "critical_tickets": [],
                 "rag_analysis_results": [],
+                "diagnosis_routes": [],
+                "diagnosis_category": [],
+                "processed_route_types": [],
                 "action_plans": [],
                 "logs": [],
-                "processed_ids": st.session_state.get('processed_ids', [])  # 保留历史已处理ID
+                "processed_ids": st.session_state.get('processed_ids', [])
             }
             
             # 清空本次巡检的结果（只保留历史数据）
@@ -110,14 +113,13 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
                         if isinstance(node_output, dict):
                             final_state.update(node_output)
                         
-                        # 检测 node_monitor 产出的 raw_reviews
-                        if node_name == "monitor" and isinstance(node_output, dict) and "raw_reviews" in node_output:
-                            new_reviews = node_output.get("raw_reviews", [])
-                            if new_reviews:
-                                # 数据同步：立即追加到 session_state.all_reviews（增量累加）
-                                st.session_state.all_reviews.extend(new_reviews)
-                                st.session_state.last_run_increment = len(new_reviews)
-                                st.write(f"📥 数据同步：已添加 {len(new_reviews)} 条新工单到全局状态（累计：{len(st.session_state.all_reviews)} 条）")
+                        # 检测 node_monitor 产出的 incr_tickets
+                        if node_name == "monitor" and isinstance(node_output, dict) and "incr_tickets" in node_output:
+                            new_tickets = node_output.get("incr_tickets", [])
+                            if new_tickets:
+                                st.session_state.all_tickets.extend(new_tickets)
+                                st.session_state.last_run_increment = len(new_tickets)
+                                st.write(f"📥 数据同步：已添加 {len(new_tickets)} 条新工单到全局状态（累计：{len(st.session_state.all_tickets)} 条）")
                         
                         # 检测 node_rag_analysis 产出的 rag_analysis_results（本次巡检的新增结果）
                         if node_name == "rag_analysis" and isinstance(node_output, dict) and "rag_analysis_results" in node_output:
@@ -129,13 +131,12 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
                                 st.session_state.latest_rag_results = rag_results
                                 st.write(f"📄 本次巡检发现 {len(rag_results)} 条RAG归因结果（累计：{len(st.session_state.incremental_rag_results)} 条）")
                         
-                        # 检测 node_action_gen 产出的 action_plans（本次巡检的新增结果）
-                        if node_name == "action_gen" and isinstance(node_output, dict) and "action_plans" in node_output:
+                        # 检测任意动作节点产出的 action_plans（累积）
+                        if node_name in ("generate_email_node", "generate_jira_node", "escalate_human_node") and isinstance(node_output, dict) and "action_plans" in node_output:
                             action_plans = node_output.get("action_plans", [])
                             if action_plans:
-                                # 保存本次巡检的行动建议（增量）
                                 st.session_state.incremental_action_plans = action_plans
-                                st.write(f"💡 本次巡检生成 {len(action_plans)} 条行动建议")
+                                st.write(f"💡 本次巡检行动建议累计 {len(action_plans)} 条")
                         
                         # 更新已处理的ID集合（用于幂等性）
                         if isinstance(node_output, dict) and "processed_ids" in node_output:
@@ -164,24 +165,24 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
             result = final_state
             rag_results = result.get("rag_analysis_results", [])
             action_plans = result.get("action_plans", [])
-            raw_reviews = result.get("raw_reviews", [])
-            critical_reviews = result.get("critical_reviews", [])
+            incr_tickets = result.get("incr_tickets", [])
+            critical_tickets = result.get("critical_tickets", [])
             
-            # 生成批次记录（用于 session_state，保持兼容性）
             batch_record = {
                 'time': current_time,
                 'rag_results': rag_results,
                 'actions': action_plans,
-                'new_reviews_count': len(raw_reviews),
-                'critical_count': len(critical_reviews)
+                'new_tickets_count': len(incr_tickets),
+                'critical_count': len(critical_tickets)
             }
             
             # 插入到头部（Prepend）
             st.session_state.incident_history.insert(0, batch_record)
             
-            # 存储结果到 session_state（用于兼容性）
+            # 存储结果到 session_state（供指标计算使用 diagnosis_category）
             st.session_state['workflow_result'] = result
             st.session_state['workflow_completed'] = True
+            st.session_state['diagnosis_category'] = result.get('diagnosis_category', [])
             st.session_state['need_refresh'] = True
             
             # 立即调用 st.rerun() 触发页面刷新，让渲染区域显示新数据
@@ -202,18 +203,18 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
     db = get_database()
     db_history = db.get_history(limit=50)  # 获取更多记录以过滤
     
-    # 获取 Hero Section 中已显示的 review_id 集合（如果有）
-    hero_review_ids = set()
+    # 获取 Hero Section 中已显示的 ticket_id 集合（如果有）
+    hero_ticket_ids = set()
     if incident_history:
         latest_batch = incident_history[0]
         latest_rag_results = latest_batch.get('rag_results', [])
         if latest_rag_results:
-            hero_review_ids = {r.get("review_id") for r in latest_rag_results if r.get("review_id")}
+            hero_ticket_ids = {r.get("ticket_id") for r in latest_rag_results if r.get("ticket_id")}
     
     # 过滤掉 Hero Section 中已显示的记录，只保留有 RAG 结果和 Action 的记录
     filtered_history = [
         record for record in db_history
-        if record.get("review_id") not in hero_review_ids
+        if record.get("ticket_id") not in hero_ticket_ids
         and record.get("rag_result") is not None
         and record.get("action_plan") is not None
     ]
@@ -225,7 +226,7 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
         latest_rag_results = latest_batch.get('rag_results', [])
         latest_actions = latest_batch.get('actions', [])
         latest_time = latest_batch.get('time', '未知时间')
-        latest_new_reviews = latest_batch.get('new_reviews_count', 0)
+        latest_new_tickets = latest_batch.get('new_tickets_count', 0)
         
         # 检查是否有 P0 级风险（High 优先级的 Action 或产品缺陷的 RAG）
         has_p0_risk = False
@@ -239,38 +240,32 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
         with col_title:
             st.markdown("### 🚨 本次巡检发现 (Latest)")
         with col_stats:
-            st.caption(f"📅 {latest_time} · 新增 {latest_new_reviews} 条工单")
+            st.caption(f"📅 {latest_time} · 新增 {latest_new_tickets} 条工单")
         
         # 如果有 P0 级风险，使用 st.error 容器包裹增强警示感
         if has_p0_risk:
             st.error("⚠️ **检测到高风险问题，请立即处理！**")
         
-        # Case-Based 成组渲染：通过 review_id 匹配 RAG 和 Action
+        # Case-Based 成组渲染：通过 ticket_id 匹配 RAG 和 Action
         if latest_rag_results:
-            # 创建 action 字典，以 review_id 为 key，方便查找
-            # 支持完整匹配和部分匹配（处理可能的 ID 格式差异）
             action_dict = {}
             for action in latest_actions:
-                review_id = action.get('review_id')
-                if review_id:
-                    action_dict[review_id] = action
-                    # 也支持 base_id 匹配（如果 review_id 包含下划线）
-                    if '_' in str(review_id):
-                        base_id = str(review_id).split('_')[0]
+                tid = action.get('ticket_id')
+                if tid:
+                    action_dict[tid] = action
+                    if '_' in str(tid):
+                        base_id = str(tid).split('_')[0]
                         if base_id not in action_dict:
                             action_dict[base_id] = action
             
             for item_idx, rag_result in enumerate(latest_rag_results):
-                # 通过 review_id 匹配对应的 Action
-                review_id = rag_result.get("review_id")
+                tid = rag_result.get("ticket_id")
                 action_item = None
                 
-                if review_id:
-                    # 优先完整匹配
-                    action_item = action_dict.get(review_id)
-                    # 如果完整匹配失败，尝试 base_id 匹配
-                    if not action_item and '_' in str(review_id):
-                        base_id = str(review_id).split('_')[0]
+                if tid:
+                    action_item = action_dict.get(tid)
+                    if not action_item and '_' in str(tid):
+                        base_id = str(tid).split('_')[0]
                         action_item = action_dict.get(base_id)
                 
                 # 如果还是没匹配到，尝试按索引匹配（兜底方案）
@@ -319,15 +314,13 @@ def render_tab(api_key, calculate_metrics, generate_ai_brief):
                         # 注意：get_history() 已经将 JSON 解析为字典，直接使用即可
                         if rag_result and isinstance(rag_result, dict):
                             rag_result_obj = rag_result.copy()
-                            # 确保包含 review_id 和 review_text
-                            rag_result_obj['review_id'] = record.get('review_id')
-                            rag_result_obj['review_text'] = record.get('content', '')
+                            rag_result_obj['ticket_id'] = record.get('ticket_id')
+                            rag_result_obj['ticket_content'] = record.get('ticket_content', '')
                             
-                            # 构建 Action 计划对象（兼容格式）
                             action_item = None
                             if action_plan and isinstance(action_plan, dict):
                                 action_item = action_plan.copy()
-                                action_item['review_id'] = record.get('review_id')
+                                action_item['ticket_id'] = record.get('ticket_id')
                             
                             # 渲染完整的 Case（RAG + Action 成对）
                             render_incident_card(

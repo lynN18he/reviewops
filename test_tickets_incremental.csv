@@ -1,4 +1,53 @@
 Ticket_ID,User_Message,True_Category,Expected_Tool
+TIK-002,"中东那个 Aramex 专线到底什么时候能接？客户天天催 tracking link，你们不接这个 carrier 我们只能手动传轨迹，客服都快崩溃了。",噪音,None
+TIK-003,"说实话你们系统最近老是卡，页面 loading 半天，我们是做大件出海的，一分钟都是钱，能不能别老搞这些花里胡哨的功能先把稳定性搞好？",噪音,None
+TIK-004,"为什么你们 Pro 版才支持自动售后 flow？我们基础版就不能用吗？感觉就是强行 upsell。",噪音,None
+TIK-005,"能不能接那个巴西的小众物流 Jadlog？我们巴西站 60% 都走这个，不支持真的很难受。",噪音,None
+TIK-006,"讲真你们价格真的太贵了，我们隔壁用 17track 才几十刀，你们凭啥这么高？有 loyalty discount 吗？",噪音,None
+TIK-007,"客服机器人回复太死板了吧，客户问 refund policy 结果自动发 tracking link，这不是搞笑吗？能不能优化一下。",噪音,None
+TIK-008,"我们现在在考虑自研系统，你们有没有长期合约优惠？不然 CFO 不批预算。",噪音,None
+TIK-009,"你们什么时候支持 TikTok Shop 的订单同步？现在全靠手动 CSV import，真的要命。",噪音,None
+TIK-010,"感觉你们最近 SLA 不太行啊，能不能给个稳定性承诺？我们旺季马上到了很慌。",噪音,None
+TIK-011,"我们技术说你们的 Webhook 回调一直 401 Unauthorized，是不是 API Token 过期了？但是我在 Shopify App 后台也没看到重新生成的入口，能说清楚点吗？",配置错误,search_api_docs_and_sop
+TIK-012,"订单同步接口频繁报 429 Rate Limit Exceeded，我们一天才 3000 单，不至于吧？是我们调用姿势不对还是你们限流策略改了？",配置错误,search_api_docs_and_sop
+TIK-013,"Webhook 一直提示 HMAC validation failed，我们是按文档用 SHA256 算的，secret 也是从你们 dashboard copy 的，到底哪一步错了？",配置错误,search_api_docs_and_sop
+TIK-014,"我已经在 Shopify 后台安装了你们 App，但你们系统显示‘未授权访问’，是不是 OAuth callback URL 要自己配？文档写得太抽象了。",配置错误,search_api_docs_and_sop
+TIK-015,"调用创建 shipment 的 API 返回 500 Internal Server Error，但是 body 里没有 error message，这种怎么排查？我们客户已经在催单了。",配置错误,search_api_docs_and_sop
+TIK-016,"我们配置了自动发货规则：SKU 包含‘FURN-’走海外仓，但是实际还是走默认仓库，是 rule priority 有顺序吗？还是我漏了什么条件？",配置错误,search_api_docs_and_sop
+TIK-017,"API 返回 403 Forbidden，说 scope 不够，可是我已经勾选了 read_orders 和 write_fulfillments，还需要别的 permission 吗？",配置错误,search_api_docs_and_sop
+TIK-018,"我们服务器能收到你们 Webhook，但是 body 是空的，HTTP 200 也回了，就是没有订单数据，是不是 event type 订阅错了？",配置错误,search_api_docs_and_sop
+TIK-019,"后台提示 API Token invalid signature，我们是直接 copy 的，难道有空格问题？你们能给个正确 header 示例吗？",配置错误,search_api_docs_and_sop
+TIK-020,"我们在测试环境调通了，切到 production 就一直 401，是不是 endpoint 不一样？文档没写清楚 sandbox 和 prod 的区别。",配置错误,search_api_docs_and_sop
+TIK-021,"Shopify 订单状态是 fulfilled，但你们系统还是 pending，是不是需要开启 order/updated 的 Webhook？现在完全对不上。",配置错误,search_api_docs_and_sop
+TIK-022,"我们批量导入 tracking number 用你们的 CSV 模板，总是报字段 format error，SKU 那列是必须的吗？",配置错误,search_api_docs_and_sop
+TIK-023,"API 调用 get tracking 返回 404 Not Found，但这个运单号在官网能查到，是不是 carrier code 传错？",配置错误,search_api_docs_and_sop
+TIK-024,"你们的 callback URL 需要支持 HTTPS 吗？我们测试环境是 HTTP，一直收不到 Webhook。",配置错误,search_api_docs_and_sop
+TIK-025,"我们用了你们提供的 Postman collection，但是 pre-request script 一直报错，environment variable 要怎么配？",配置错误,search_api_docs_and_sop
+TIK-026,"自动售后邮件没有触发，flow 条件是 delivery_status=delivered，是不是字段名要写成 delivered_at？文档没示例。",配置错误,search_api_docs_and_sop
+TIK-027,"每次刷新 access token 都提示 invalid_grant，是不是 refresh token 只能用一次？我们现在整个对接卡死。",配置错误,search_api_docs_and_sop
+TIK-028,"我们服务器时间和你们差了 5 分钟，会不会导致签名校验失败？Webhook 一直 401。",配置错误,search_api_docs_and_sop
+TIK-029,"调用批量查询接口 1000 条就超时，是不是单次 request 有 limit？需要分页吗？文档没看到 page 参数说明。",配置错误,search_api_docs_and_sop
+TIK-030,"Shopify App 卸载重装后，历史订单全部不同步，是不是需要重新触发 full sync？在哪操作？",配置错误,search_api_docs_and_sop
+TIK-031,"疯了！今天早上开始所有 USPS 的 tracking 全部卡在 In Transit，不再更新，昨天晚上还正常，你们昨晚是不是发版动了爬虫？我们客服已经被客户轰炸。",突发故障,search_release_notes
+TIK-032,"批量导出订单的按钮突然不见了！昨天还在的，是 UI 更新了吗？我们财务今天要对账直接没法干活。",突发故障,search_release_notes
+TIK-033,"今天上午 10 点之后新订单一个都没同步进来，Shopify 那边正常出单，是不是你们 order sync 服务挂了？昨天还好好的。",突发故障,search_release_notes
+TIK-034,"自动发送 review 邮件的 flow 全部停了，昨天还有几百封发出去，今天 0，是不是你们邮件服务 provider 切换了？",突发故障,search_release_notes
+TIK-035,"更新到你们新版本后，tracking page 打开直接 500，我们广告都在跑啊，这不是烧钱吗？",突发故障,search_release_notes
+TIK-036,"今天突然所有 DHL 的状态都显示 unknown carrier，之前识别得好好的，是不是你们 carrier mapping 表改了？",突发故障,search_release_notes
+TIK-037,"Webhook 昨晚开始延迟严重，基本要 20 分钟才推送过来，之前都是秒级，是不是队列出问题了？",突发故障,search_release_notes
+TIK-038,"你们今天是不是升级数据库了？我们查询订单列表一直 spinning，根本加载不出来，昨天一点问题没有。",突发故障,search_release_notes
+TIK-039,"自动匹配 SKU 到仓库的逻辑今天全乱了，规则没改过，怎么突然走错仓？是不是算法更新了？",突发故障,search_release_notes
+TIK-040,"tracking 页面自定义 CSS 全失效了，样式全部回到默认，是不是你们新版把 theme 重置了？",突发故障,search_release_notes
+TIK-041,"那个带阿拉伯语地址的订单又乱码了，每次中东客户下单都要手动改字符编码，这个老问题到底什么时候能彻底修？",历史缺陷,search_known_issues
+TIK-042,"只要 SKU 超过 50 个的 bundle product，你们算运费 API 就超时，这个我们去年就提过了，怎么还在？",历史缺陷,search_known_issues
+TIK-043,"多 currency 店铺在结算页显示的 tracking link 货币符号老是错位，这个问题反反复复，每次都说在排期。",历史缺陷,search_known_issues
+TIK-044,"Shopify 草稿订单转正式订单后，你们系统经常识别成两个订单，这个 duplicate bug 真的是老毛病了。",历史缺陷,search_known_issues
+TIK-045,"带 emoji 的客户姓名同步过来就报 JSON parse error，这个问题我们已经反馈三次了，还是没修。",历史缺陷,search_known_issues
+TIK-046,"只要客户修改一次收货地址，你们系统就不会再更新 tracking 状态，这个 edge case 每次都踩雷。",历史缺陷,search_known_issues
+TIK-047,"大件商品超过 70kg 的订单，自动分配物流商规则就失效，必须手动改，这个限制能不能解决？",历史缺陷,search_known_issues
+TIK-048,"使用你们老版 API v1 的客户，每次月初都会出现统计报表少数据的情况，这个 recurring issue 真的很头疼。",历史缺陷,search_known_issues
+TIK-049,"只要订单包含 preorder SKU，你们的 fulfillment status 就会卡在 partial，这个问题从去年旺季就存在。",历史缺陷,search_known_issues
+TIK-050,"我们启用多仓库后，库存同步偶尔会负数，这个 bug 你们之前说是 concurrency 问题，现在还是会发生。",历史缺陷,search_known_issues
 TIK-051,"讲真你们现在这个定价对我们这种刚起量的 Shopify 卖家真的压力山大，一个月几百刀现金流扛不住啊，能不能给个 startup plan？",噪音,None
 TIK-052,"能不能尽快接一下南非那个 Buffalo 物流？我们现在全靠手动上传 tracking，客服都在骂系统不好用。",噪音,None
 TIK-053,"你们后台统计数据和我们 ERP 对不上，这样财务根本不信你们系统，能不能优化下报表逻辑？",噪音,None

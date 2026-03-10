@@ -1,144 +1,221 @@
 """
-行动生成节点：基于归因结果生成行动建议
+三个动作节点：generate_email_node / generate_jira_node / escalate_human_node
+根据 diagnosis_routes 过滤工单并生成对应行动，写 DB 并追加 action_plans、processed_route_types。
 """
 
 import json
-from src.state import ReviewState
+from src.state import (
+    TicketState,
+    NEW_REGRESSION,
+    USER_CONFIG_ERROR,
+    KNOWN_ISSUE,
+    UNKNOWN_ESCALATE,
+)
 from src.utils import init_llm
-from src.config import ActionConfig
 from src.services.database import get_database
 from langchain_core.messages import HumanMessage
 
 
-def node_action_gen(state: ReviewState) -> ReviewState:
+def _route_types_for_email():
+    return {USER_CONFIG_ERROR, KNOWN_ISSUE}
+
+
+def _tickets_by_route(state: TicketState, route_type: str):
+    """返回本节点要处理的 diagnosis_routes 子集及对应 rag 结果"""
+    routes = state.get("diagnosis_routes", [])
+    rag_by_id = {r.get("ticket_id"): r for r in state.get("rag_analysis_results", [])}
+    out = []
+    for r in routes:
+        if r.get("route_type") == route_type:
+            out.append((r, rag_by_id.get(r.get("ticket_id"))))
+    return out
+
+
+def _update_db_for_plans(ticket_id: str, rag_result: dict, action_plan: dict, category: str):
+    db = get_database()
+    priority = action_plan.get("priority", "Medium")
+    risk_level = "high" if priority == "High" else "medium" if priority == "Medium" else "low"
+    urgency_level = {"High": "P0", "Medium": "P1", "Low": "P2"}.get(priority, "P2")
+    db.update_analysis(
+        ticket_id=ticket_id,
+        rag_result=rag_result,
+        action_plan=action_plan,
+        risk_level=risk_level,
+        urgency_level=urgency_level,
+        category=category,
+    )
+
+
+def generate_email_node(state: TicketState) -> TicketState:
     """
-    节点 4: 生成行动建议
-    基于归因生成 JSON 格式的 Action
+    处理 USER_CONFIG_ERROR 与 KNOWN_ISSUE：生成邮件。
+    KNOWN_ISSUE 时邮件模板需包含「这是平台已知问题（附带原 Jira 编号），研发正在抢修中」。
     """
     llm = init_llm()
-    rag_results = state.get("rag_analysis_results", [])
-    
-    if not rag_results:
-        log_message = "⚠️ 行动生成节点：无归因结果需要生成行动"
-        return {
-            "action_plans": [],
-            "logs": [log_message]
-        }
-    
+    routes = state.get("diagnosis_routes", [])
+    rag_by_id = {r.get("ticket_id"): r for r in state.get("rag_analysis_results", [])}
+    to_process = [(r, rag_by_id.get(r.get("ticket_id"))) for r in routes if r.get("route_type") in _route_types_for_email()]
+
+    if not to_process:
+        return {"logs": ["📧 邮件节点：无 USER_CONFIG_ERROR/KNOWN_ISSUE 工单"]}
+
     action_plans = []
-    
-    for rag_result in rag_results:
-        review_text = rag_result.get("review_text", "")
-        conclusion = rag_result.get("conclusion", "")
-        reason = rag_result.get("reason", "")
-        evidence = rag_result.get("evidence", "")
-        
-        # 生成行动建议（基于 RAG 归因结果）
-        action_prompt = f"""基于以下归因分析，生成具体的行动建议。
-
-用户反馈：{review_text}
-归因结论：{conclusion}
-分析原因：{reason}
-相关证据：{evidence if evidence else "无"}
-
-请返回 JSON 格式：
-{{
-  "action_type": "Jira Ticket" 或 "Doc Update" 或 "Email Draft" 或 "Meeting",
-  "title": "行动标题",
-  "content": "详细内容（包含用户反馈、归因结论和建议措施）",
-  "priority": "High" 或 "Medium" 或 "Low"
-}}
-
-只返回 JSON，不要有其他说明。"""
-        
-        try:
-            response = llm.invoke([HumanMessage(content=action_prompt)])
-            answer = response.content if hasattr(response, 'content') else str(response)
-            
-            # 解析 JSON（改进的解析逻辑）
-            json_str = answer.strip()
-            
-            # 移除可能的代码块标记
-            if json_str.startswith("```json"):
-                json_str = json_str[7:]
-            elif json_str.startswith("```"):
-                json_str = json_str[3:]
-            if json_str.endswith("```"):
-                json_str = json_str[:-3]
-            json_str = json_str.strip()
-            
-            # 尝试提取 JSON（处理可能的额外文本）
-            if "{" in json_str and "}" in json_str:
-                start_idx = json_str.find("{")
-                end_idx = json_str.rfind("}") + 1
-                json_str = json_str[start_idx:end_idx]
-            
-            result = json.loads(json_str)
-            action_plans.append({
-                "review_id": rag_result.get("review_id"),
-                "action_type": result.get("action_type", ActionConfig.DEFAULT_ACTION_TYPE),
-                "title": result.get("title", ""),
-                "content": result.get("content", ""),
-                "priority": result.get("priority", ActionConfig.DEFAULT_PRIORITY)
-            })
-            
-        except Exception as e:
-            # 如果解析失败，使用默认值
-            action_plans.append({
-                "review_id": rag_result.get("review_id"),
-                "action_type": ActionConfig.DEFAULT_ACTION_TYPE,
-                "title": f"处理工单 {rag_result.get('review_id')} 的问题",
-                "content": review_text,
-                "priority": ActionConfig.DEFAULT_PRIORITY
-            })
-    
-    log_message = f"💡 行动生成节点：生成 {len(action_plans)} 个行动建议"
-    
-    # ==================== 结果回写数据库 ====================
-    db = get_database()
-    updated_count = 0
-    
-    # 构建 RAG 结果字典，以 review_id 为 key（使用 state 中的 rag_analysis_results）
-    rag_dict = {r.get("review_id"): r for r in rag_results}
-    
-    # 更新每条工单的 RAG 结果和 Action 计划到数据库
-    for action_plan in action_plans:
-        review_id = action_plan.get("review_id")
-        if not review_id:
+    for route, rag in to_process:
+        if not rag:
             continue
-        
-        # 获取对应的 RAG 结果
-        rag_result = rag_dict.get(review_id)
-        
-        priority = action_plan.get("priority", "Medium")
-        risk_level = None
-        if priority == "High":
-            risk_level = "high"
-        elif priority == "Medium":
-            risk_level = "medium"
-        elif priority == "Low":
-            risk_level = "low"
-        urgency_level = {"High": "P0", "Medium": "P1", "Low": "P2"}.get(priority, "P2")
-        action_type = action_plan.get("action_type") or ""
-        category = "研发升级" if "Jira" in action_type else "技术支援"
-        
-        success = db.update_analysis(
-            review_id=review_id,
-            rag_result=rag_result,
-            action_plan=action_plan,
-            risk_level=risk_level,
-            urgency_level=urgency_level,
-            category=category
-        )
-        
-        if success:
-            updated_count += 1
-    
-    if updated_count > 0:
-        log_message += f" | ✅ 已更新 {updated_count} 条记录到数据库"
-    
+        ticket_id = route.get("ticket_id", "")
+        ticket_content = rag.get("ticket_content", "")
+        conclusion = rag.get("conclusion", "")
+        reason = rag.get("reason", "")
+        evidence = rag.get("evidence", "")
+        is_known = route.get("route_type") == KNOWN_ISSUE
+        jira_id = route.get("jira_id", "")
+
+        if is_known and jira_id:
+            prompt = f"""请为以下「已知缺陷」工单生成一封给客户的邮件（纯正文，不要 JSON）。
+要求：必须包含「这是平台已知问题，对应工单编号 {jira_id}，研发正在抢修中」的语义，并给出临时替代方案（Workaround）。
+
+用户反馈：{ticket_content}
+归因结论：{conclusion}
+原因：{reason}
+证据：{evidence}
+
+请直接输出邮件正文（可分段），不要其他说明。"""
+        else:
+            prompt = f"""请为以下「客户配置/Token 问题」工单生成一封带 SOP 步骤的邮件（纯正文）。
+要求：引导客户按 SOP 重新配置/授权，不要升级研发。
+
+用户反馈：{ticket_content}
+归因结论：{conclusion}
+原因：{reason}
+
+请直接输出邮件正文（可分段），不要其他说明。"""
+
+        try:
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            content = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+        except Exception:
+            content = f"用户反馈：{ticket_content}\n归因：{conclusion}\n请按 SOP 重新配置或联系支持。"
+            if is_known and jira_id:
+                content = f"这是平台已知问题（工单编号 {jira_id}），研发正在抢修中。\n\n{content}"
+
+        if is_known and jira_id and "已知问题" not in content and "抢修" not in content:
+            content = f"这是平台已知问题（对应工单编号：{jira_id}），研发正在抢修中。\n\n{content}"
+
+        plan = {
+            "ticket_id": ticket_id,
+            "action_type": "Email Draft",
+            "title": f"客户邮件-{ticket_id}" + ("（已知问题+临时方案）" if is_known else "（SOP 引导）"),
+            "content": content,
+            "priority": "Low" if is_known else "Medium",
+        }
+        action_plans.append(plan)
+        _update_db_for_plans(ticket_id, rag, plan, "技术支援")
+
+    existing_plans = state.get("action_plans", [])
+    existing_route_types = state.get("processed_route_types", [])
     return {
-        "action_plans": action_plans,
-        "logs": [log_message]
+        "action_plans": existing_plans + action_plans,
+        "processed_route_types": existing_route_types + ["email"],
+        "logs": [f"📧 邮件节点：已生成 {len(action_plans)} 封邮件"],
     }
 
+
+def generate_jira_node(state: TicketState) -> TicketState:
+    """处理 NEW_REGRESSION：生成 P0 Jira 提给研发。"""
+    to_process = _tickets_by_route(state, NEW_REGRESSION)
+    if not to_process:
+        return {"logs": ["🐞 Jira 节点：无 NEW_REGRESSION 工单"]}
+
+    llm = init_llm()
+    action_plans = []
+    for route, rag in to_process:
+        if not rag:
+            continue
+        ticket_id = route.get("ticket_id", "")
+        ticket_content = rag.get("ticket_content", "")
+        conclusion = rag.get("conclusion", "")
+        reason = rag.get("reason", "")
+        evidence = rag.get("evidence", "")
+
+        prompt = f"""请为以下「新发版导致的 Bug」生成一条 P0 Jira 工单（只返回 JSON，不要其他说明）。
+
+用户反馈：{ticket_content}
+归因结论：{conclusion}
+原因：{reason}
+证据：{evidence}
+
+JSON 格式：
+{{ "title": "P0 标题", "content": "详细描述（含复现步骤与影响）", "priority": "High" }}
+"""
+        try:
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            raw = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+            for prefix in ("```json", "```"):
+                if raw.startswith(prefix):
+                    raw = raw[len(prefix):].strip()
+            if raw.endswith("```"):
+                raw = raw[:-3].strip()
+            if "{" in raw and "}" in raw:
+                raw = raw[raw.index("{"): raw.rindex("}") + 1]
+            result = json.loads(raw)
+            title = result.get("title", f"P0-{ticket_id}")
+            content = result.get("content", ticket_content)
+        except Exception:
+            title = f"P0 新发版回归-{ticket_id}"
+            content = f"用户反馈：{ticket_content}\n归因：{conclusion}"
+
+        plan = {
+            "ticket_id": ticket_id,
+            "action_type": "Jira Ticket",
+            "title": title,
+            "content": content,
+            "priority": "High",
+        }
+        action_plans.append(plan)
+        _update_db_for_plans(ticket_id, rag, plan, "研发升级")
+
+    existing_plans = state.get("action_plans", [])
+    existing_route_types = state.get("processed_route_types", [])
+    return {
+        "action_plans": existing_plans + action_plans,
+        "processed_route_types": existing_route_types + ["jira"],
+        "logs": [f"🐞 Jira 节点：已生成 {len(action_plans)} 条 P0 Jira"],
+    }
+
+
+def escalate_human_node(state: TicketState) -> TicketState:
+    """UNKNOWN_ESCALATE：不强行生成结论，仅打日志并写入「转交人工」类 action_plan 便于看板展示。"""
+    to_process = _tickets_by_route(state, UNKNOWN_ESCALATE)
+    if not to_process:
+        return {"logs": ["👤 人工升级节点：无 UNKNOWN_ESCALATE 工单"]}
+
+    rag_by_id = {r.get("ticket_id"): r for r in state.get("rag_analysis_results", [])}
+    action_plans = []
+    for route, rag in to_process:
+        if not rag:
+            continue
+        ticket_id = route.get("ticket_id", "")
+        rag = rag_by_id.get(ticket_id) or {}
+        plan = {
+            "ticket_id": ticket_id,
+            "action_type": "Escalate",
+            "title": f"转交 L2 人工-{ticket_id}",
+            "content": "Agent 无法从知识库与报错中做出明确诊断，已转交 L2 技术支持人工处理。",
+            "priority": "High",
+        }
+        action_plans.append(plan)
+        _update_db_for_plans(ticket_id, rag, plan, "技术支援")
+
+    existing_plans = state.get("action_plans", [])
+    existing_route_types = state.get("processed_route_types", [])
+    return {
+        "action_plans": existing_plans + action_plans,
+        "processed_route_types": existing_route_types + ["escalate"],
+        "logs": [f"👤 人工升级节点：已转交 {len(action_plans)} 条工单给 L2 人工"],
+    }
+
+
+def next_route_node(state: TicketState) -> TicketState:
+    """空节点，仅用于挂载条件边，不修改 state。"""
+    return {}

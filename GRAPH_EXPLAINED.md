@@ -4,11 +4,11 @@
 
 ---
 
-## 1. ReviewState 的「追加模式」与「覆盖模式」
+## 1. TicketState 的「追加模式」与「覆盖模式」
 
 ### 1.1 什么是「追加」和「覆盖」？
 
-可以把 `ReviewState` 想象成一个**状态本**，里面有多类信息（字段）：
+可以把 `TicketState` 想象成一个**状态本**，里面有多类信息（字段）：
 
 - **追加模式**：新内容**接在**旧内容后面，不丢历史
 - **覆盖模式**：新内容**整体替换**旧内容，只保留当前批次
@@ -20,28 +20,23 @@
 ```python
 # src/state.py
 
-def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
+def reducer(state: TicketState, update: TicketState) -> TicketState:
     """合并状态更新"""
     merged = state.copy()
 
-    # ========== 追加模式 ==========
     if "logs" in update:
         merged["logs"] = state.get("logs", []) + update.get("logs", [])
-        # 例如：[旧日志1, 旧日志2] + [新日志3] = [旧日志1, 旧日志2, 新日志3]
 
     if "processed_ids" in update:
         existing_ids = set(state.get("processed_ids", []))
         new_ids = set(update.get("processed_ids", []))
         merged["processed_ids"] = list(existing_ids | new_ids)
-        # 例如：[TIK-051, TIK-052] | [TIK-053, TIK-054] = [TIK-051, TIK-052, TIK-053, TIK-054]（去重）
 
-    # ========== 覆盖模式 ==========
-    if "raw_reviews" in update:
-        merged["raw_reviews"] = update.get("raw_reviews", [])
-        # 例如：旧值 [工单A, 工单B] 被新值 [工单C, 工单D] 完全替换
+    if "incr_tickets" in update:
+        merged["incr_tickets"] = update.get("incr_tickets", [])
 
-    if "critical_reviews" in update:
-        merged["critical_reviews"] = update.get("critical_reviews", [])
+    if "critical_tickets" in update:
+        merged["critical_tickets"] = update.get("critical_tickets", [])
 
     if "rag_analysis_results" in update:
         merged["rag_analysis_results"] = update.get("rag_analysis_results", [])
@@ -58,8 +53,8 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 |--------|------|------|------|
 | **`logs`** | ✅ **追加** | 保留完整执行历史，便于排查 | `[旧日志] + [新日志]` |
 | **`processed_ids`** | ✅ **并集合并** | 工单 ID 去重，避免重复处理 | `[TIK-051, TIK-052] \| [TIK-053] = [TIK-051, TIK-052, TIK-053]` |
-| **`raw_reviews`** | ❌ **覆盖** | 每次 Monitor 只产出「本批」新工单 | `[工单1, 工单2]` → `[工单3, 工单4]` |
-| **`critical_reviews`** | ❌ **覆盖** | Filter 只筛选本批的高危工单 | `[高危1, 高危2]` → `[高危3, 高危4]` |
+| **`incr_tickets`** | ❌ **覆盖** | 每次 Monitor 只产出「本批」增量工单 | `[工单1, 工单2]` → `[工单3, 工单4]` |
+| **`critical_tickets`** | ❌ **覆盖** | Filter 只筛选本批的高危工单 | `[高危1, 高危2]` → `[高危3, 高危4]` |
 | **`rag_analysis_results`** | ❌ **覆盖** | RAG 只分析本批工单的归因结果 | `[结果1, 结果2]` → `[结果3, 结果4]` |
 | **`action_plans`** | ❌ **覆盖** | Action 只生成本批的行动建议 | `[行动1, 行动2]` → `[行动3, 行动4]` |
 
@@ -71,7 +66,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 
 - **覆盖（其余字段）**  
   - 这些字段表示**当前这一批**的数据，不是全量历史。  
-  - 每次运行只处理「本批」新工单，所以用新结果整体替换；例如 `raw_reviews` 表示「本批新拉取的工单」，不是「全部历史工单」。
+  - 每次运行只处理「本批」新工单，所以用新结果整体替换；例如 `incr_tickets` 表示「本批增量工单」，不是「全部历史工单」。
 
 ---
 
@@ -83,8 +78,8 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    初始状态 (Initial State)                      │
 │  State = {                                                       │
-│    raw_reviews: [],                                              │
-│    critical_reviews: [],                                          │
+│    incr_tickets: [],                                             │
+│    critical_tickets: [],                                          │
 │    rag_analysis_results: [],                                     │
 │    action_plans: [],                                             │
 │    logs: [],                                                     │
@@ -104,17 +99,17 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 │       test_tickets.csv 读取）                                    │
 │    2. 打乱顺序后，按 MIN_TICKETS_PER_BATCH 取本批数量            │
 │    3. 过滤：已存在于 DB 或 processed_ids 的工单跳过              │
-│    4. 写入 SQLite（reviews 表），并生成本批 raw_reviews         │
+│    4. 写入 SQLite（tickets 表），并生成本批 incr_tickets         │
 │                                                                  │
 │  输出:                                                           │
 │    {                                                             │
-│      raw_reviews: [工单A, 工单B],        ← 覆盖                  │
+│      incr_tickets: [工单A, 工单B],      ← 覆盖                  │
 │      processed_ids: [TIK-053, TIK-054],  ← 并集合并（新 ID）     │
 │      logs: ["📅 工单输入源：... | 本次新增 2 条工单"]  ← 追加    │
 │    }                                                             │
 │                                                                  │
 │  State 变化:                                                     │
-│    ✅ raw_reviews: [] → [工单A, 工单B]  (覆盖)                   │
+│    ✅ incr_tickets: [] → [工单A, 工单B]  (覆盖)                  │
 │    ✅ processed_ids: [TIK-051,052] → [..., TIK-053, TIK-054]     │
 │    ✅ logs: [] → ["📅 ... 本次新增 2 条工单"]  (追加)            │
 └─────────────────────────────────────────────────────────────────┘
@@ -122,25 +117,25 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 ┌─────────────────────────────────────────────────────────────────┐
 │  🔍 Filter Node (node_filter)                                    │
 │  ─────────────────────────────────────────────────────────────  │
-│  输入: state.raw_reviews = [工单A, 工单B]                        │
+│  输入: state.incr_tickets = [工单A, 工单B]                        │
 │                                                                  │
 │  处理:                                                           │
 │    1. 构建 B2B SaaS 高危工单筛选 Prompt（核心业务阻断、系统级   │
 │       报错、高情绪资损等）                                        │
-│    2. 调用 LLM 返回 critical_review_ids；失败时用关键词兜底     │
+│    2. 调用 LLM 返回 critical_ticket_ids；失败时用关键词兜底     │
 │       （502、504、白屏、宕机、全不更新、无法登陆等）             │
 │    3. 按 ID 匹配出本批高危工单列表                              │
 │                                                                  │
 │  输出:                                                           │
 │    {                                                             │
-│      critical_reviews: [工单A],        ← 覆盖（筛选结果）        │
+│      critical_tickets: [工单A],        ← 覆盖（筛选结果）        │
 │      logs: ["🔍 筛选节点：... 筛选出 1 条高危工单"]  ← 追加      │
 │    }                                                             │
 │                                                                  │
 │  State 变化:                                                     │
-│    ✅ critical_reviews: [] → [工单A]  (覆盖)                     │
+│    ✅ critical_tickets: [] → [工单A]  (覆盖)                     │
 │    ✅ logs: [旧日志] → [旧日志, "🔍 ... 1 条高危工单"]  (追加)   │
-│    ⚠️ raw_reviews: [工单A, 工单B]  (不变，后续节点不再使用)     │
+│    ⚠️ incr_tickets: [工单A, 工单B]  (不变，后续节点不再使用)    │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
                     [条件判断: 是否有高危工单?]
@@ -153,7 +148,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 ┌─────────────────────────────────┐   ┌──────────────────────┐
 │  📄 RAG Node (node_rag_analysis) │   │  直接结束 (END)       │
 │  ───────────────────────────────│   │                      │
-│  输入: state.critical_reviews    │   │  State 保持 Filter   │
+│  输入: state.critical_tickets    │   │  State 保持 Filter   │
 │        = [工单A]                 │   │  节点的输出不变      │
 │                                  │   └──────────────────────┘
 │  处理:                           │
@@ -166,7 +161,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 │    {                             │
 │      rag_analysis_results: [     │
 │        {                         │
-│          review_id: "TIK-054",    │
+│          ticket_id: "TIK-054",    │
 │          conclusion: "✅ 配置问题",│
 │          reason: "分析原因...",   │
 │          evidence: "证据片段..."  │
@@ -179,7 +174,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 │    ✅ rag_analysis_results: [] →  │
 │       [{ conclusion, reason, evidence, ... }]                   │
 │    ✅ logs: [旧日志] → [旧日志, "📄 完成 N 条工单的归因分析"]   │
-│    ⚠️ critical_reviews: [工单A]  (不变，后续节点不再使用)      │
+│    ⚠️ critical_tickets: [工单A]  (不变，后续节点不再使用)        │
 └─────────────────────────────────┘
                     ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -198,7 +193,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 │    {                                                             │
 │      action_plans: [                                            │
 │        {                                                         │
-│          review_id: "TIK-054",                                   │
+│          ticket_id: "TIK-054",                                   │
 │          action_type: "Jira Ticket",                            │
 │          title: "处理工单 TIK-054 的问题",                       │
 │          content: "详细内容...",                                 │
@@ -217,8 +212,8 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    最终状态 (Final State)                        │
 │  State = {                                                       │
-│    raw_reviews: [工单A, 工单B],        ← Monitor 输出           │
-│    critical_reviews: [工单A],          ← Filter 输出             │
+│    incr_tickets: [工单A, 工单B],       ← Monitor 输出           │
+│    critical_tickets: [工单A],         ← Filter 输出             │
 │    rag_analysis_results: [{ conclusion, ... }],                 │
 │    action_plans: [{ Jira Ticket, High, ... }],                  │
 │    logs: [                                                        │
@@ -235,7 +230,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 ### 2.1 关键观察
 
 1. **数据流**  
-   `raw_reviews` → `critical_reviews` → `rag_analysis_results` → `action_plans`，节点之间只传递本批数据，不混入历史批次。
+   `incr_tickets` → `critical_tickets` → `rag_analysis_results` → `action_plans`，节点之间只传递本批数据，不混入历史批次。
 
 2. **状态累积**  
    - `logs`、`processed_ids` 为**累积**，每次运行追加。  
@@ -245,7 +240,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
    Filter 之后若无高危工单，直接 **END**，不执行 RAG 与 Action。
 
 4. **持久化**  
-   - Monitor：新工单写入 SQLite `reviews` 表。  
+   - Monitor：新工单写入 SQLite `tickets` 表。  
    - Action：同表更新 `rag_result`、`action_plan`、`urgency_level`、`category`。
 
 ---
@@ -256,7 +251,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 
 `compile()` 把「图定义」变成「可执行的工作流」：
 
-- **图定义** = `StateGraph(ReviewState)` + 节点与边  
+- **图定义** = `StateGraph(TicketState)` + 节点与边  
 - **可执行工作流** = `graph_app`，能对初始状态做 `stream()` / `invoke()`
 
 ### 3.2 代码位置
@@ -265,7 +260,7 @@ def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
 # src/graph.py
 
 def build_graph():
-    workflow = StateGraph(ReviewState)
+    workflow = StateGraph(TicketState)
 
     workflow.add_node("monitor", node_monitor)
     workflow.add_node("filter", node_filter)
@@ -276,7 +271,7 @@ def build_graph():
     workflow.add_edge("monitor", "filter")
     workflow.add_conditional_edges(
         "filter",
-        should_continue_analysis,   # 有 critical_reviews 则走 rag_analysis，否则 end
+        should_continue_analysis,   # 有 critical_tickets 则走 rag_analysis，否则 end
         { "rag_analysis": "rag_analysis", "end": END }
     )
     workflow.add_edge("rag_analysis", "action_gen")
@@ -298,8 +293,8 @@ def build_graph():
 ```python
 # 1. 初始状态（可保留历史 processed_ids）
 initial_state = {
-    "raw_reviews": [],
-    "critical_reviews": [],
+    "incr_tickets": [],
+    "critical_tickets": [],
     "rag_analysis_results": [],
     "action_plans": [],
     "logs": [],
@@ -323,7 +318,7 @@ final_state = graph_app.invoke(initial_state)
 
 1. **追加 vs 覆盖**  
    - 追加：`logs`、`processed_ids`（保留历史、幂等）。  
-   - 覆盖：`raw_reviews`、`critical_reviews`、`rag_analysis_results`、`action_plans`（仅本批）。
+   - 覆盖：`incr_tickets`、`critical_tickets`、`rag_analysis_results`、`action_plans`（仅本批）。
 
 2. **数据流**  
    Monitor → Filter →（若有高危）→ RAG → Action；每步只依赖上一步的本批输出。
@@ -336,9 +331,9 @@ final_state = graph_app.invoke(initial_state)
 | 组件 | 说明 |
 |------|------|
 | **数据源** | `test_tickets_incremental.csv`（优先）或 `test_tickets.csv`，格式一致（如 Ticket_ID, User_Message） |
-| **持久化** | SQLite `reviews` 表，含 urgency_level、category，无 rating |
-| **Monitor** | 从 CSV 随机取本批工单，去重后入库并产出 raw_reviews |
-| **Filter** | B2B SaaS 高危标准 + 关键词兜底，产出 critical_reviews |
+| **持久化** | SQLite `tickets` 表（ticket_id, ticket_content, urgency_level, category） |
+| **Monitor** | 从 CSV 随机取本批工单，去重后入库并产出 incr_tickets |
+| **Filter** | B2B SaaS 高危标准 + 关键词兜底，产出 critical_tickets |
 | **RAG** | L2 智能体 + Tool 调用（ChromaDB 检索），产出归因结论与证据 |
 | **Action** | 生成行动建议并回写 DB（含 urgency_level、category） |
 

@@ -4,7 +4,7 @@ RAG 分析节点：基于工具调用（Tool Use）的归因分析
 """
 
 import json
-from src.state import ReviewState
+from src.state import TicketState
 from src.utils import init_llm
 from src.tools import get_support_agent_tools, AGENT_SYSTEM_PROMPT
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -46,7 +46,7 @@ def run_attribution_with_tools(llm, question: str, max_tool_rounds: int = 5):
     return _run_agent_with_tools(llm, question, "", max_tool_rounds)
 
 
-def _run_agent_with_tools(llm, review_text: str, review_id: str, max_tool_rounds: int = 5):
+def _run_agent_with_tools(llm, ticket_content: str, ticket_id: str, max_tool_rounds: int = 5):
     """
     使用绑定了工具的 LLM 进行一轮归因分析：可多次调用工具，最终解析 JSON 结论。
     返回 (conclusion, reason, evidence, tool_outputs) 或 (None, None, None, []) 表示解析失败。
@@ -56,7 +56,7 @@ def _run_agent_with_tools(llm, review_text: str, review_id: str, max_tool_rounds
     llm_with_tools = llm.bind_tools(tools)
     tool_outputs = []
 
-    user_content = f"用户反馈：{review_text}\n\n请根据上述说明调用合适的工具获取排查线索后，输出最终 JSON（conclusion、reason、evidence）。"
+    user_content = f"用户反馈：{ticket_content}\n\n请根据上述说明调用合适的工具获取排查线索后，输出最终 JSON（conclusion、reason、evidence）。"
     messages = [
         SystemMessage(content=AGENT_SYSTEM_PROMPT),
         HumanMessage(content=user_content),
@@ -82,7 +82,7 @@ def _run_agent_with_tools(llm, review_text: str, review_id: str, max_tool_rounds
                 continue
             args = (tc.get("args") or {}) if isinstance(tc, dict) else (getattr(tc, "args", None) or {})
             if isinstance(args, dict) and "query" not in args:
-                args["query"] = review_text
+                args["query"] = ticket_content
             try:
                 tool_result = tool_fn.invoke(args)
             except Exception as e:
@@ -117,15 +117,15 @@ def _run_agent_with_tools(llm, review_text: str, review_id: str, max_tool_rounds
         return None, None, None, tool_outputs
 
 
-def node_rag_analysis(state: ReviewState) -> ReviewState:
+def node_rag_analysis(state: TicketState) -> TicketState:
     """
     节点 3: RAG 归因分析
     使用 Mock Tools（search_known_issues / search_release_notes / search_api_docs_and_sop）替代向量检索。
     """
     llm = init_llm()
-    critical_reviews = state.get("critical_reviews", [])
+    critical_tickets = state.get("critical_tickets", [])
 
-    if not critical_reviews:
+    if not critical_tickets:
         log_message = "⚠️ RAG 分析节点：无高危工单需要分析"
         return {
             "rag_analysis_results": [],
@@ -134,12 +134,12 @@ def node_rag_analysis(state: ReviewState) -> ReviewState:
 
     rag_results = []
 
-    for review in critical_reviews:
-        review_text = review.get("review_text", "")
-        review_id = review.get("review_id", "")
+    for ticket in critical_tickets:
+        ticket_content = ticket.get("ticket_content", "")
+        ticket_id = ticket.get("ticket_id", "")
 
         try:
-            conclusion, reason, evidence, _ = _run_agent_with_tools(llm, review_text, review_id)
+            conclusion, reason, evidence, _ = _run_agent_with_tools(llm, ticket_content, ticket_id)
             if conclusion is None:
                 conclusion, reason, evidence = (
                     "❓ 需要人工判断",
@@ -147,16 +147,16 @@ def node_rag_analysis(state: ReviewState) -> ReviewState:
                     "",
                 )
             rag_results.append({
-                "review_id": review_id,
-                "review_text": review_text,
+                "ticket_id": ticket_id,
+                "ticket_content": ticket_content,
                 "conclusion": conclusion,
                 "reason": reason,
                 "evidence": evidence or "",
             })
         except Exception as e:
             rag_results.append({
-                "review_id": review_id,
-                "review_text": review_text,
+                "ticket_id": ticket_id,
+                "ticket_content": ticket_content,
                 "conclusion": "❓ 需要人工判断",
                 "reason": f"RAG 分析失败: {str(e)[:100]}",
                 "evidence": "",

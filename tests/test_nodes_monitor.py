@@ -5,14 +5,14 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from src.nodes.monitor import node_monitor, load_tickets_from_csv
-from src.state import ReviewState
+from src.state import TicketState
 
 
 def _fake_tickets(n=3):
     return [
         {
-            "review_id": f"TIK-{100 + i}",
-            "review_text": f"工单内容 {i}",
+            "ticket_id": f"TIK-{100 + i}",
+            "ticket_content": f"工单内容 {i}",
             "user_id": f"ticket_TIK-{100 + i}",
             "timestamp": "2026-03-04 12:00:00",
             "urgency_level": None,
@@ -34,9 +34,9 @@ class TestNodeMonitor:
         db.exists.return_value = False
         mock_get_db.return_value = db
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -45,11 +45,11 @@ class TestNodeMonitor:
 
         result = node_monitor(state)
 
-        assert "raw_reviews" in result
+        assert "incr_tickets" in result
         assert "processed_ids" in result
         assert "logs" in result
-        assert len(result["raw_reviews"]) >= 2
-        assert len(result["processed_ids"]) == len(result["raw_reviews"])
+        assert len(result["incr_tickets"]) >= 2
+        assert len(result["processed_ids"]) == len(result["incr_tickets"])
 
     @patch("src.nodes.monitor.load_tickets_from_csv")
     @patch("src.nodes.monitor.get_database")
@@ -57,9 +57,9 @@ class TestNodeMonitor:
         """测试增量文件为空时返回无新工单"""
         mock_load_csv.return_value = []
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -68,7 +68,7 @@ class TestNodeMonitor:
 
         result = node_monitor(state)
 
-        assert result["raw_reviews"] == []
+        assert result["incr_tickets"] == []
         assert result["processed_ids"] == []
         assert "未找到工单文件或文件为空" in result["logs"][0]
 
@@ -81,9 +81,9 @@ class TestNodeMonitor:
         db.exists.side_effect = lambda rid: rid == "TIK-100"
         mock_get_db.return_value = db
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -92,7 +92,7 @@ class TestNodeMonitor:
 
         result = node_monitor(state)
 
-        assert "TIK-100" not in result["processed_ids"] or len(result["raw_reviews"]) == 0
+        assert "TIK-100" not in result["processed_ids"] or len(result["incr_tickets"]) == 0
 
     @patch("src.nodes.monitor.load_tickets_from_csv")
     @patch("src.nodes.monitor.get_database")
@@ -103,9 +103,9 @@ class TestNodeMonitor:
         db.exists.return_value = False
         mock_get_db.return_value = db
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -127,9 +127,9 @@ class TestNodeMonitor:
         db.exists.return_value = False
         mock_get_db.return_value = db
 
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
@@ -138,10 +138,10 @@ class TestNodeMonitor:
 
         result = node_monitor(state)
 
-        if result["raw_reviews"]:
-            ticket = result["raw_reviews"][0]
-            assert "review_id" in ticket
+        if result["incr_tickets"]:
+            ticket = result["incr_tickets"][0]
+            assert "ticket_id" in ticket
             assert "user_id" in ticket
             assert "timestamp" in ticket
-            assert "review_text" in ticket
+            assert "ticket_content" in ticket
             assert "urgency_level" in ticket or "category" in ticket

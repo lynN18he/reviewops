@@ -1,107 +1,98 @@
 """
-测试行动生成节点
+测试动作节点：generate_email_node / generate_jira_node / escalate_human_node
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
-from src.nodes.action import node_action_gen
-from src.state import ReviewState
+from src.nodes.action import generate_email_node, generate_jira_node, escalate_human_node
+from src.state import TicketState, NEW_REGRESSION, USER_CONFIG_ERROR, KNOWN_ISSUE, UNKNOWN_ESCALATE
 
 
-class TestNodeActionGen:
-    """测试行动生成节点"""
-    
-    def test_node_action_empty_rag_results(self):
-        """测试空归因结果"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
-            "rag_analysis_results": [],
-            "action_plans": [],
-            "logs": [],
-            "processed_ids": []
-        }
-        
-        result = node_action_gen(state)
-        
-        assert result["action_plans"] == []
-        assert len(result["logs"]) > 0
-        assert "无归因结果需要生成行动" in result["logs"][0]
-    
-    @patch('src.nodes.action.init_llm')
-    def test_node_action_with_llm_success(self, mock_init_llm):
-        """测试 LLM 生成行动成功"""
-        # Mock LLM 响应
+def _base_state():
+    return {
+        "incr_tickets": [],
+        "critical_tickets": [],
+        "rag_analysis_results": [],
+        "diagnosis_routes": [],
+        "processed_route_types": [],
+        "action_plans": [],
+        "logs": [],
+        "processed_ids": [],
+    }
+
+
+class TestGenerateEmailNode:
+    """测试邮件节点"""
+
+    def test_empty_routes(self):
+        state: TicketState = {**_base_state(), "diagnosis_routes": []}
+        out = generate_email_node(state)
+        assert "无 USER_CONFIG_ERROR/KNOWN_ISSUE" in out["logs"][0]
+
+    @patch("src.nodes.action.get_database")
+    @patch("src.nodes.action.init_llm")
+    def test_known_issue_email_template(self, mock_init_llm, mock_get_db):
         mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = '''{
-            "action_type": "Jira Ticket",
-            "title": "修复 API 401 鉴权问题",
-            "content": "用户反馈 create order API 返回 401，需排查 Token 与授权",
-            "priority": "High"
-        }'''
-        mock_llm.invoke.return_value = mock_response
+        mock_llm.invoke.return_value = MagicMock(content="这是平台已知问题（工单 JIRA-1042），研发正在抢修中。请使用临时方案：...")
         mock_init_llm.return_value = mock_llm
-        
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
-            "rag_analysis_results": [
-                {
-                    "review_id": "TIK-054",
-                    "review_text": "调用 create order API 一直返回 401",
-                    "conclusion": "⚠️ 需进一步调查",
-                    "reason": "需要检查",
-                    "evidence": "无"
-                }
-            ],
-            "action_plans": [],
-            "logs": [],
-            "processed_ids": []
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        state: TicketState = {
+            **_base_state(),
+            "diagnosis_routes": [{"ticket_id": "TIK-1", "route_type": KNOWN_ISSUE, "jira_id": "JIRA-1042"}],
+            "rag_analysis_results": [{"ticket_id": "TIK-1", "ticket_content": "阿拉伯语地址乱码", "conclusion": "已知缺陷", "reason": "", "evidence": "JIRA-1042"}],
         }
-        
-        result = node_action_gen(state)
-        
-        assert len(result["action_plans"]) > 0
-        action = result["action_plans"][0]
-        assert action["review_id"] == "TIK-054"
-        assert "action_type" in action
-        assert "title" in action
-        assert "content" in action
-        assert "priority" in action
-    
-    @patch('src.nodes.action.init_llm')
-    def test_node_action_json_parse_error(self, mock_init_llm):
-        """测试 JSON 解析错误时使用默认值"""
-        # Mock LLM 返回无效 JSON
+        out = generate_email_node(state)
+        assert len(out["action_plans"]) >= 1
+        assert out["action_plans"][0]["action_type"] == "Email Draft"
+        assert "email" in out["processed_route_types"]
+
+
+class TestGenerateJiraNode:
+    """测试 Jira 节点"""
+
+    def test_empty_regression(self):
+        state: TicketState = {**_base_state(), "diagnosis_routes": []}
+        out = generate_jira_node(state)
+        assert "无 NEW_REGRESSION" in out["logs"][0]
+
+    @patch("src.nodes.action.get_database")
+    @patch("src.nodes.action.init_llm")
+    def test_jira_node_output(self, mock_init_llm, mock_get_db):
         mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "这不是有效的 JSON"
-        mock_llm.invoke.return_value = mock_response
+        mock_llm.invoke.return_value = MagicMock(content='{"title": "P0 回归", "content": "描述", "priority": "High"}')
         mock_init_llm.return_value = mock_llm
-        
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
-            "rag_analysis_results": [
-                {
-                    "review_id": "TIK-055",
-                    "review_text": "测试工单内容",
-                    "conclusion": "测试结论",
-                    "reason": "测试原因",
-                    "evidence": "测试证据"
-                }
-            ],
-            "action_plans": [],
-            "logs": [],
-            "processed_ids": []
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        state: TicketState = {
+            **_base_state(),
+            "diagnosis_routes": [{"ticket_id": "TIK-2", "route_type": NEW_REGRESSION, "jira_id": ""}],
+            "rag_analysis_results": [{"ticket_id": "TIK-2", "ticket_content": "发版后白屏", "conclusion": "缺陷", "reason": "", "evidence": ""}],
         }
+        out = generate_jira_node(state)
+        assert len(out["action_plans"]) >= 1
+        assert out["action_plans"][0]["action_type"] == "Jira Ticket"
+        assert out["action_plans"][0]["priority"] == "High"
 
-        result = node_action_gen(state)
 
-        assert len(result["action_plans"]) > 0
-        action = result["action_plans"][0]
-        assert action["review_id"] == "TIK-055"
-        assert action["action_type"] == "Jira Ticket"  # 默认值
-        assert action["priority"] == "Medium"  # 默认值
+class TestEscalateHumanNode:
+    """测试人工升级节点"""
 
+    def test_empty_unknown(self):
+        state: TicketState = {**_base_state(), "diagnosis_routes": []}
+        out = escalate_human_node(state)
+        assert "无 UNKNOWN_ESCALATE" in out["logs"][0]
+
+    @patch("src.nodes.action.get_database")
+    def test_escalate_output(self, mock_get_db):
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        state: TicketState = {
+            **_base_state(),
+            "diagnosis_routes": [{"ticket_id": "TIK-3", "route_type": UNKNOWN_ESCALATE, "jira_id": ""}],
+            "rag_analysis_results": [{"ticket_id": "TIK-3", "ticket_content": "看不懂报错", "conclusion": "❓ 需要人工", "reason": "", "evidence": ""}],
+        }
+        out = escalate_human_node(state)
+        assert len(out["action_plans"]) >= 1
+        assert out["action_plans"][0]["action_type"] == "Escalate"
+        assert "escalate" in out["processed_route_types"]

@@ -1,11 +1,12 @@
 """
-ReviewOps - 用户反馈决策中台
-一个帮助产品经理分析用户反馈的 B端 SaaS 原型
+ReviewOps - B2B SaaS 研发智能问诊中台
+L2 Support Copilot · 让研发专注核心业务
 """
 
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
@@ -31,13 +32,13 @@ def load_tickets():
         return pd.DataFrame()
     if df.empty or "User_Message" not in df.columns:
         return pd.DataFrame()
-    # 映射为与 Graph/State 兼容的字段：review_id, review_text, user_id, timestamp, urgency_level, category
+    # 映射为与 Graph/State 兼容的字段：ticket_id, ticket_content, user_id, timestamp, urgency_level, category
     if "Ticket_ID" in df.columns:
-        df = df.rename(columns={"Ticket_ID": "review_id", "User_Message": "review_text"})
+        df = df.rename(columns={"Ticket_ID": "ticket_id", "User_Message": "ticket_content"})
     else:
-        df["review_id"] = df.index.astype(str).map(lambda i: f"TIK-{i}")
-        df = df.rename(columns={"User_Message": "review_text"})
-    df["user_id"] = df["review_id"].apply(lambda x: f"ticket_{x}")
+        df["ticket_id"] = df.index.astype(str).map(lambda i: f"TIK-{i}")
+        df = df.rename(columns={"User_Message": "ticket_content"})
+    df["user_id"] = df["ticket_id"].apply(lambda x: f"ticket_{x}")
     df["urgency_level"] = None
     df["category"] = None
     df["timestamp"] = ""
@@ -49,58 +50,24 @@ load_tickets.clear = getattr(load_tickets, "clear", lambda: None)
 # 加载工单数据（单条/批量跑测时 User_Message 作为 query 传给 Agent）
 tickets_df = load_tickets()
 
-# ==================== 工具函数（SaaS 运维北极星指标） ====================
+# ==================== 工具函数（SaaS 运维北极星指标，来自 DB 实时统计） ====================
 def calculate_metrics(df, session_state=None):
     """
-    计算看板指标：今日工单总数、L1 智能拦截率、P0 研发升级率。
-    兼容传入 session_state 以根据巡检结果动态计算拦截率/升级率；否则使用 Mock 值。
+    从 SQLite get_dashboard_metrics() 实时统计看板指标。
+    返回 (total_tickets, deflection_rate, escalation_rate, delta_l1, delta_p0)；无 Mock，无「演示」标签。
     """
-    total_tickets = 0 if df.empty else len(df)
-    if total_tickets == 0:
-        return total_tickets, 0.0, 0.0
-
-    # 尝试从 session_state 或历史结果计算 L1 拦截率、P0 升级率
-    l1_rate, p0_rate = 72.5, 12.3  # 默认 Mock
-    if session_state is not None:
-        all_rag = session_state.get("incremental_rag_results", []) or session_state.get("latest_rag_results", [])
-        all_actions = session_state.get("incremental_action_plans", [])
-        # 从数据库补充：有 rag_result/action_plan 的历史记录
-        try:
-            from src.services.database import get_database
-            db = get_database()
-            history = db.get_history(limit=500)
-            for r in history:
-                rag = r.get("rag_result")
-                action = r.get("action_plan")
-                if isinstance(rag, dict) and rag:
-                    all_rag = all_rag + [rag]
-                if isinstance(action, dict) and action:
-                    all_actions = all_actions + [action]
-        except Exception:
-            pass
-        total_analyzed = len(all_rag) or 1
-        if total_analyzed > 0:
-            # L1 拦截：结论含「用户」「配置」「已知局限」等视为被拦截
-            deflected = sum(
-                1 for r in all_rag
-                if isinstance(r, dict) and any(
-                    k in (r.get("conclusion") or "")
-                    for k in ("用户", "配置", "已知局限", "✅", "用户使用问题")
-                )
-            )
-            l1_rate = round((deflected / total_analyzed) * 100, 1)
-            # P0 升级：行动类型为 Jira Ticket 视为升级研发
-            jira_count = sum(
-                1 for a in all_actions
-                if isinstance(a, dict) and (a.get("action_type") or "").strip() == "Jira Ticket"
-            )
-            p0_rate = round((jira_count / total_analyzed) * 100, 1)
-    return total_tickets, l1_rate, p0_rate
+    try:
+        from src.services.database import get_database
+        db = get_database()
+        total_tickets, _dc, _ec, deflection_rate, escalation_rate = db.get_dashboard_metrics()
+    except Exception:
+        total_tickets, deflection_rate, escalation_rate = 0, 0.0, 0.0
+    return total_tickets, deflection_rate, escalation_rate, None, None
 
 
-def generate_ai_brief(df, _unused=None):
-    """生成 B2B SaaS 技术简报（技术支持主管视角）。"""
-    total = 0 if df.empty else len(df)
+def generate_ai_brief(df, total_from_db=None):
+    """生成 B2B SaaS 技术简报。total_from_db 若传入则优先用（与看板指标一致），否则用 df 行数。"""
+    total = total_from_db if total_from_db is not None else (0 if df.empty else len(df))
     brief = """
 ### 📋 技术简报
 
@@ -130,7 +97,7 @@ def extract_product_name():
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.markdown("## 🔬 ReviewOps")
-    st.markdown("*用户反馈决策中台*")
+    st.markdown("*B2B SaaS 研发智能问诊中台*")
     
     st.divider()
     
@@ -173,13 +140,13 @@ with st.sidebar:
     st.caption(f"📄 工单数据: `test_tickets.csv`")
     st.caption(f"📋 知识库: `saas_knowledge.txt` (已向量化)")
     st.caption(f"💾 向量库: `./chroma_db`")
-    st.caption(f"🕐 最后更新: 2025-01-15")
+    st.caption(f"🕐 最后更新: {datetime.now().strftime('%Y-%m-%d')}")
 
 
 # ==================== 主界面 ====================
 # 标题区
 st.markdown('<h1 class="main-title">ReviewOps</h1>', unsafe_allow_html=True)
-st.markdown("**用户反馈决策中台** · 让产品决策有据可依")
+st.markdown("**B2B SaaS 研发智能问诊中台** · L2 Support Copilot · 让研发专注核心业务")
 st.markdown("---")
 
 # ==================== 全局状态初始化 ====================
@@ -208,7 +175,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style="text-align: center; color: #6b7280; font-size: 0.85rem;">
-        <p>🔬 ReviewOps v1.0 · 用户反馈决策中台</p>
+        <p>🔬 ReviewOps v1.0 · B2B SaaS 研发智能问诊中台</p>
         <p>Powered by RAG + LLM · Built with Streamlit</p>
     </div>
     """,

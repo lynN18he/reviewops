@@ -14,31 +14,31 @@ def init_session_state(tickets_df: pd.DataFrame, calculate_metrics):
     初始化 session_state（工单为 SSOT）
 
     Args:
-        tickets_df: 工单数据 DataFrame（含 review_id, review_text, user_id, timestamp, urgency_level, category）
+        tickets_df: 工单数据 DataFrame（含 ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
         calculate_metrics: 计算指标函数 (df, session_state?) -> (total_tickets, l1_rate, p0_rate)
     """
-    # 检查并初始化 all_reviews（与 Graph 兼容：review_id, review_text, user_id, timestamp, urgency_level, category）
-    if 'all_reviews' not in st.session_state:
+    # 检查并初始化 all_tickets（与 Graph 兼容：ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
+    if 'all_tickets' not in st.session_state:
         db = get_database()
-        db_reviews = db.get_all_reviews()
-        if db_reviews:
-            st.session_state.all_reviews = [
+        db_tickets = db.get_all_tickets()
+        if db_tickets:
+            st.session_state.all_tickets = [
                 {
-                    'review_id': r.get('review_id'),
-                    'user_id': f"ticket_{r.get('review_id', '')}" if isinstance(r.get('review_id'), str) and not r.get('review_id', '').startswith('ticket_') else f"user_{str(r.get('review_id', ''))[:20]}",
+                    'ticket_id': r.get('ticket_id'),
+                    'user_id': f"ticket_{r.get('ticket_id', '')}" if isinstance(r.get('ticket_id'), str) and not (r.get('ticket_id') or '').startswith('ticket_') else f"user_{str(r.get('ticket_id', ''))[:20]}",
                     'timestamp': r.get('created_at', ''),
-                    'review_text': r.get('content', ''),
+                    'ticket_content': r.get('ticket_content', ''),
                     'urgency_level': r.get('urgency_level'),
                     'category': r.get('category'),
                 }
-                for r in db_reviews
+                for r in db_tickets
             ]
         else:
-            st.session_state.all_reviews = tickets_df.to_dict('records') if not tickets_df.empty else []
+            st.session_state.all_tickets = tickets_df.to_dict('records') if not tickets_df.empty else []
         st.session_state.last_run_increment = 0
-        if len(st.session_state.all_reviews) > 0:
-            init_df = pd.DataFrame(st.session_state.all_reviews)
-            init_total, init_l1, init_p0 = calculate_metrics(init_df, None)
+        if len(st.session_state.all_tickets) > 0:
+            init_df = pd.DataFrame(st.session_state.all_tickets)
+            init_total, init_l1, init_p0, _d1, _d2 = calculate_metrics(init_df, None)
             st.session_state['prev_total_tickets'] = init_total
             st.session_state['prev_l1_rate'] = init_l1
             st.session_state['prev_p0_rate'] = init_p0

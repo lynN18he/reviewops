@@ -1,42 +1,54 @@
 """
-ReviewOps 状态定义
+ReviewOps 状态定义（B2B 工单分诊）
 """
 
 from typing import TypedDict, List
 
+# 诊断路由类型（agent_node 仅输出以下四类，用于条件边强拦截）
+NEW_REGRESSION = "NEW_REGRESSION"           # 新 Bug/发版故障 -> P0 Jira
+USER_CONFIG_ERROR = "USER_CONFIG_ERROR"     # 用户配置错误 -> 邮件+SOP
+KNOWN_ISSUE = "KNOWN_ISSUE"                # 已知缺陷（已有 Jira）-> 邮件+原 Jira+Workaround
+UNKNOWN_ESCALATE = "UNKNOWN_ESCALATE"       # 未知需人工 -> 转 L2 人工
+# 兼容旧键
+UNKNOWN = UNKNOWN_ESCALATE
 
-class ReviewState(TypedDict):
+
+class TicketState(TypedDict):
     """工作流状态（B2B 工单分诊）"""
-    raw_reviews: List[dict]  # 新工单
-    critical_reviews: List[dict]  # 筛选后的高危工单
-    rag_analysis_results: List[dict]  # 归因结果
-    action_plans: List[dict]  # 行动建议
-    logs: List[str]  # 日志（使用 operator.add 追加）
-    processed_ids: List[str]  # 已处理的工单 ID 集合（用于幂等性去重）
+    incr_tickets: List[dict]
+    critical_tickets: List[dict]
+    rag_analysis_results: List[dict]
+    diagnosis_routes: List[dict]   # [{ ticket_id, route_type, jira_id? }, route_type 为上述四枚举之一
+    diagnosis_category: List[str]  # 与 diagnosis_routes 一一对应的枚举列表，便于统计与路由
+    processed_route_types: List[str]
+    action_plans: List[dict]
+    logs: List[str]
+    processed_ids: List[str]
 
 
-def reducer(state: ReviewState, update: ReviewState) -> ReviewState:
+def reducer(state: TicketState, update: TicketState) -> TicketState:
     """合并状态更新"""
-    # 对于列表类型，使用 operator.add 追加
-    # 对于其他类型，直接覆盖
     merged = state.copy()
-    
-    # 合并列表（追加）
+
     if "logs" in update:
         merged["logs"] = state.get("logs", []) + update.get("logs", [])
-    if "raw_reviews" in update:
-        merged["raw_reviews"] = update.get("raw_reviews", [])
-    if "critical_reviews" in update:
-        merged["critical_reviews"] = update.get("critical_reviews", [])
+    if "incr_tickets" in update:
+        merged["incr_tickets"] = update.get("incr_tickets", [])
+    if "critical_tickets" in update:
+        merged["critical_tickets"] = update.get("critical_tickets", [])
     if "rag_analysis_results" in update:
         merged["rag_analysis_results"] = update.get("rag_analysis_results", [])
+    if "diagnosis_routes" in update:
+        merged["diagnosis_routes"] = update.get("diagnosis_routes", [])
+    if "diagnosis_category" in update:
+        merged["diagnosis_category"] = update.get("diagnosis_category", [])
+    if "processed_route_types" in update:
+        merged["processed_route_types"] = state.get("processed_route_types", []) + update.get("processed_route_types", [])
     if "action_plans" in update:
-        merged["action_plans"] = update.get("action_plans", [])
+        merged["action_plans"] = state.get("action_plans", []) + update.get("action_plans", [])
     if "processed_ids" in update:
-        # 合并已处理ID集合（去重）
         existing_ids = set(state.get("processed_ids", []))
         new_ids = set(update.get("processed_ids", []))
         merged["processed_ids"] = list(existing_ids | new_ids)
-    
-    return merged
 
+    return merged
