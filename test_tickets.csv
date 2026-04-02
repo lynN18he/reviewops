@@ -1,2 +1,12 @@
 Ticket_ID,User_Message,True_Category,Expected_Tool
-TIK-001,"你们这个 Enterprise plan 一个月 399 美金真的顶不住啊，我们现在单量才每天 200 单，ROI 根本没打平，能不能给个 discount 或者按 fulfilled order 计费？不然老板天天说要换 SaaS，我夹在中间很难做。",噪音,None
+TIK-014,"同一个订单被创建多次，我们已经加了idempotency_key但还是出现duplicate_insert_attempt，这种幂等问题你们有没有稳定方案，现在库存都被搞乱了",配置错误,search_api_docs_and_sop
+TIK-015,"物流状态一直不更新，carrier API返回空而且日志有carrier_response_empty，我们怀疑代理IP被封但不确定，这种情况有没有排查步骤客户天天催单",配置错误,search_api_docs_and_sop
+TIK-016,"我们调用接口一直报Invalid Signature，日志显示signature_mismatch，我已经确认HMAC-SHA256算法和参数排序都一致，这种情况还有什么隐含规则文档完全没写",配置错误,search_api_docs_and_sop
+TIK-017,"2月29号创建的订单全部显示成3月1号，我们这边没有任何改动，这种日期错误太低级了吧，客户已经在投诉你们系统不稳定了",突发故障,search_release_notes
+TIK-018,"最近ETA完全不准，欧洲订单预测2天到但实际要一周，这明显是算法问题吧，这种功能上线前没测试吗，我们运营被客户骂惨了",突发故障,search_release_notes
+TIK-043,"SSL证书没有自动续期导致我们域名直接报错，这种基础设施问题影响太大了能不能彻底解决",历史缺陷,search_known_issues
+TIK-044,"导出的文件偶尔损坏打不开，我们重新导出才好，这种偶发问题很难排查有没有日志可以看",历史缺陷,search_known_issues
+TIK-045,"Webhook返回200但仍然重试，这种情况是不是因为返回时间超过3秒导致的，这个超时时间可以调整吗",边界提问,none
+TIK-032,"页面使用一段时间后明显卡顿，怀疑是前端内存泄漏，我们刷新后才恢复，这种问题影响操作效率太大",历史缺陷,search_known_issues
+TIK-070,"系统有没有英文以外的语言支持我们有多国家团队",噪音,none
+

@@ -4,17 +4,35 @@
 """
 
 import os
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
 
+# 仓库根目录（src 的上一级），用于固定 chroma_db 路径，避免依赖进程 cwd
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_vector_db_path() -> str:
+    """
+    向量库持久化目录：默认 <repo>/chroma_db，与当前工作目录无关。
+    VECTOR_DB_PATH 若为相对路径，则相对仓库根解析。
+    """
+    raw = (os.getenv("VECTOR_DB_PATH") or "").strip()
+    if not raw:
+        return str((_REPO_ROOT / "chroma_db").resolve())
+    p = Path(raw)
+    if p.is_absolute():
+        return str(p.resolve())
+    return str((_REPO_ROOT / p).resolve())
+
 
 class LLMConfig:
     """LLM 配置"""
     # 模型配置
-    MODEL: str = os.getenv("LLM_MODEL", "qwen-plus")
+    MODEL: str = os.getenv("LLM_MODEL", "qwen3-max-2026-01-23")
     TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0"))
     
     # API Key（从环境变量读取）
@@ -43,11 +61,13 @@ class EmbeddingConfig:
 
 class VectorStoreConfig:
     """向量数据库配置"""
-    PERSIST_DIRECTORY: str = os.getenv("VECTOR_DB_PATH", "./chroma_db")
+    PERSIST_DIRECTORY: str = _resolve_vector_db_path()
     
     # RAG 检索参数
     TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))  # 检索文档数量
     DISTANCE_THRESHOLD: float = float(os.getenv("RAG_DISTANCE_THRESHOLD", "1.5"))  # 距离阈值
+    # 历史字段：RAG 工具检索已改为 LangChain similarity_score_threshold（见 tools.RAG_SCORE_THRESHOLD），不再读取本项。
+    CHROMA_MAX_DISTANCE: float = float(os.getenv("RAG_CHROMA_MAX_DISTANCE", "1.25"))
     MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "300"))  # 每个文档的最大长度
     MAX_DOCS_IN_CONTEXT: int = int(os.getenv("RAG_MAX_DOCS_IN_CONTEXT", "3"))  # 上下文中的最大文档数
 
@@ -64,10 +84,11 @@ class FilterConfig:
 
 class MonitorConfig:
     """监控节点配置"""
-    MIN_TICKETS_PER_BATCH: int = int(os.getenv("MONITOR_MIN_TICKETS", "2"))  # 每批最少工单数
+    MIN_TICKETS_PER_BATCH: int = int(os.getenv("MONITOR_MIN_TICKETS", "7"))  # 每批随机拉取工单数
     USE_TICKETS_CSV: bool = os.getenv("MONITOR_USE_TICKETS_CSV", "false").lower() == "true"
     TICKETS_CSV_PATH: str = os.getenv("MONITOR_TICKETS_CSV_PATH", "test_tickets.csv")
     TICKETS_INCREMENTAL_CSV: str = os.getenv("MONITOR_TICKETS_INCREMENTAL_CSV", "test_tickets_incremental.csv")
+    SEED_CSV: str = os.getenv("MONITOR_SEED_CSV", "")  # 非空时 seed_db 强制使用此 CSV 路径
 
 
 class ActionConfig:

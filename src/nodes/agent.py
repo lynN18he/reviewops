@@ -5,6 +5,7 @@
 import json
 import re
 from src.state import TicketState, NEW_REGRESSION, USER_CONFIG_ERROR, KNOWN_ISSUE, UNKNOWN_ESCALATE
+from src.nodes.rag import REFUSAL_EVIDENCE_CORE
 from src.utils import init_llm
 from langchain_core.messages import HumanMessage
 
@@ -38,6 +39,14 @@ def agent_node(state: TicketState) -> TicketState:
         conclusion = (r.get("conclusion") or "")
         reason = (r.get("reason") or "")
         evidence = (r.get("evidence") or "")
+        kr = r.get("knowledge_relevant", True)
+        if isinstance(kr, str):
+            kr = kr.strip().lower() in ("true", "1", "yes")
+
+        # 拒绝回答 / 知识库不相关：强制 UNKNOWN_ESCALATE，禁止进入邮件或 Jira 草稿
+        if kr is False or REFUSAL_EVIDENCE_CORE in evidence:
+            routes.append({"ticket_id": ticket_id, "route_type": UNKNOWN_ESCALATE, "jira_id": ""})
+            continue
 
         # 规则优先：已知缺陷且能提取到 Jira 编号 -> KNOWN_ISSUE
         jira_id = _extract_jira_id(evidence + conclusion)
@@ -67,10 +76,13 @@ def agent_node(state: TicketState) -> TicketState:
 - NEW_REGRESSION：新 Bug 或发版故障，需提 P0 Jira
 - UNKNOWN_ESCALATE：无法判断或资料不足，需转人工
 
+【路由铁律】若证据中的来源索引为 SOP- 或发版记录类，而结论却写成「产品已知局限」，应优先判为 USER_CONFIG_ERROR（配置/常规问题），不得判为 KNOWN_ISSUE。
+仅当证据明确指向 JIRA- 缺陷库且结论为已知缺陷时，才判 KNOWN_ISSUE。
+
 工单ID: {ticket_id}
 结论: {conclusion}
 原因: {reason}
-证据: {evidence[:300] if evidence else "无"}
+证据: {evidence[:500] if evidence else "无"}
 
 只返回一个值：USER_CONFIG_ERROR、KNOWN_ISSUE、NEW_REGRESSION 或 UNKNOWN_ESCALATE。"""
         try:

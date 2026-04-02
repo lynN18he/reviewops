@@ -38,13 +38,12 @@ class TestLLMConfig:
     def test_model_default(self):
         """测试模型默认值"""
         with patch.dict(os.environ, {}, clear=True):
-            assert LLMConfig.MODEL == "qwen-plus"
+            assert LLMConfig.MODEL == "qwen3-max-2026-01-23"
     
     def test_model_from_env(self):
         """测试从环境变量读取模型"""
         with patch.dict(os.environ, {"LLM_MODEL": "qwen-turbo"}):
-            # 需要重新导入才能生效，这里只测试 getter
-            assert os.getenv("LLM_MODEL", "qwen-plus") == "qwen-turbo"
+            assert os.getenv("LLM_MODEL", "qwen3-max-2026-01-23") == "qwen-turbo"
 
 
 class TestEmbeddingConfig:
@@ -64,8 +63,9 @@ class TestVectorStoreConfig:
     """测试向量数据库配置"""
     
     def test_default_values(self):
-        """测试默认值"""
-        assert VectorStoreConfig.PERSIST_DIRECTORY == "./chroma_db"
+        """测试默认值（向量库路径为绝对路径，不依赖进程 cwd）"""
+        from pathlib import Path
+        assert Path(VectorStoreConfig.PERSIST_DIRECTORY).is_absolute()
         assert VectorStoreConfig.TOP_K == 5
         assert VectorStoreConfig.DISTANCE_THRESHOLD == 1.5
         assert VectorStoreConfig.MAX_CONTEXT_LENGTH == 300
@@ -88,7 +88,7 @@ class TestMonitorConfig:
     
     def test_default_values(self):
         """测试默认值"""
-        assert MonitorConfig.MIN_TICKETS_PER_BATCH == 2
+        assert MonitorConfig.MIN_TICKETS_PER_BATCH == 7
         assert MonitorConfig.TICKETS_INCREMENTAL_CSV == "test_tickets_incremental.csv"
 
 

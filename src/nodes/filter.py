@@ -3,9 +3,11 @@
 B2B SaaS 运维标准：核心业务阻断、系统级报错、客户情绪激烈且资损
 """
 
+import os
 import json
 from src.state import TicketState
 from src.utils import init_llm
+from src.services.database import get_database
 from langchain_core.messages import HumanMessage
 
 # 降级模式：LLM 失败时，工单文本包含以下任一关键词即视为高危
@@ -20,10 +22,16 @@ def node_filter(state: TicketState) -> TicketState:
     """
     节点 2: 筛选高危工单（P0/P1）
     使用 LLM 按 B2B SaaS 运维标准判断是否为核心业务阻断、系统级报错或高情绪资损类工单。
+    seed 模式下全部视为高危，确保全量分析。
     """
-    llm = init_llm()
     incr_tickets = state.get("incr_tickets", [])
+    if os.getenv("MONITOR_SEED_CSV"):
+        return {
+            "critical_tickets": incr_tickets,
+            "logs": [f"🔍 筛选节点（seed 模式）：全部 {len(incr_tickets)} 条工单进入 RAG 分析"]
+        }
 
+    llm = init_llm()
     if not incr_tickets:
         log_message = "⚠️ 筛选节点：无新工单需要筛选"
         return {
@@ -84,11 +92,25 @@ def node_filter(state: TicketState) -> TicketState:
                 if str(base_id) in [str(cid) for cid in critical_ids] or base_id in [str(cid) for cid in critical_ids]:
                     critical_tickets.append(ticket)
 
+        # 数据状态闭环：将本批次中非高危的 pending 工单更新为 intercepted
+        critical_ticket_ids = {t.get("ticket_id", "") for t in critical_tickets}
+        intercepted_ids = [t.get("ticket_id", "") for t in incr_tickets if t.get("ticket_id", "") not in critical_ticket_ids]
+        if intercepted_ids:
+            db = get_database()
+            updated = db.mark_tickets_intercepted(intercepted_ids)
+            if updated > 0:
+                log_intercepted = f" | 已标记 {updated} 条为 intercepted"
+            else:
+                log_intercepted = ""
+        else:
+            log_intercepted = ""
+
         log_message = f"🔍 筛选节点：从 {len(incr_tickets)} 条工单中筛选出 {len(critical_tickets)} 条高危工单"
         if critical_tickets:
             log_message += f" (ID: {[r.get('ticket_id') for r in critical_tickets]})"
         elif critical_ids:
             log_message += f" | LLM返回的ID: {critical_ids}，但匹配失败"
+        log_message += log_intercepted
 
         return {
             "critical_tickets": critical_tickets,
@@ -102,10 +124,21 @@ def node_filter(state: TicketState) -> TicketState:
             if any(kw in text for kw in FALLBACK_SAAS_KEYWORDS):
                 critical_tickets.append(ticket)
 
+        # 数据状态闭环：降级模式下同样将非高危的 pending 工单更新为 intercepted
+        critical_ticket_ids = {t.get("ticket_id", "") for t in critical_tickets}
+        intercepted_ids = [t.get("ticket_id", "") for t in incr_tickets if t.get("ticket_id", "") not in critical_ticket_ids]
+        if intercepted_ids:
+            db = get_database()
+            updated = db.mark_tickets_intercepted(intercepted_ids)
+            log_intercepted = f" | 已标记 {updated} 条为 intercepted" if updated > 0 else ""
+        else:
+            log_intercepted = ""
+
         log_message = f"🔍 筛选节点（降级模式）：从 {len(incr_tickets)} 条工单中筛选出 {len(critical_tickets)} 条高危工单"
         if critical_tickets:
             log_message += f" (ID: {[r.get('ticket_id') for r in critical_tickets]})"
         log_message += f" | LLM错误: {str(e)[:50]}"
+        log_message += log_intercepted
 
         return {
             "critical_tickets": critical_tickets,

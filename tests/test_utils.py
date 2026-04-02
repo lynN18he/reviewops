@@ -16,7 +16,7 @@ class TestInitLLM:
     def test_init_llm_success(self, mock_config, mock_chat_tongyi):
         """测试成功初始化 LLM"""
         mock_config.get_api_key.return_value = "test-api-key"
-        mock_config.MODEL = "qwen-plus"
+        mock_config.MODEL = "qwen3-max-2026-01-23"
         mock_config.TEMPERATURE = 0
         mock_llm = MagicMock()
         mock_chat_tongyi.return_value = mock_llm
@@ -24,7 +24,7 @@ class TestInitLLM:
         result = init_llm()
         
         mock_chat_tongyi.assert_called_once_with(
-            model="qwen-plus",
+            model="qwen3-max-2026-01-23",
             temperature=0,
             dashscope_api_key="test-api-key"
         )

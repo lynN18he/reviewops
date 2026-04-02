@@ -29,6 +29,10 @@ import random
 #         return None
 # ==================== 以上为注释掉的 RAG 逻辑 ====================
 
+from src.config import LLMConfig
+from src.tongyi_check_response_patch import apply_patch
+
+apply_patch()
 
 from langchain_community.chat_models import ChatTongyi
 
@@ -41,9 +45,9 @@ def init_llm(api_key):
 
     try:
         llm = ChatTongyi(
-            model="qwen-plus",
-            temperature=0,
-            dashscope_api_key=api_key
+            model=LLMConfig.MODEL,
+            temperature=LLMConfig.TEMPERATURE,
+            dashscope_api_key=api_key,
         )
         return llm
     except Exception as e:
@@ -79,7 +83,9 @@ def match_with_spec(complaint, qa_chain=None):
     # 使用 Tool 调用进行归因分析（L2 技术支持智能体）
     try:
         from src.nodes.rag import run_attribution_with_tools
-        conclusion, reason, evidence, tool_outputs = run_attribution_with_tools(qa_chain["llm"], complaint)
+        conclusion, reason, evidence, tool_outputs, _kr = run_attribution_with_tools(
+            qa_chain["llm"], complaint
+        )
         if conclusion is None:
             conclusion = "❓ 需要人工判断"
         spec_match = evidence if evidence else "\n\n".join(tool_outputs) if tool_outputs else "未获取到工具返回证据"
@@ -135,6 +141,8 @@ def generate_action_plan(topic_name: str, rag_conclusion: str, user_complaints: 
 - 如果归因是 **用户误操作/文档不清** -> 生成 Doc Update（更新文档/SOP）或 Email Draft（客服话术）
 - 如果归因是 **物流/服务问题** -> 生成 Email Draft（给物流商或客服主管）
 - 如果归因是 **复杂问题需要讨论** -> 生成 Meeting（会议安排）
+
+**防幻觉（Email/Doc 正文）**：若 action_type 为 Email Draft 或 Doc Update，content 中禁止捏造知识库未出现的具体时间戳、Unix 时间、虚构参数示例；无依据则只写规则步骤。
 
 请严格按照以下 JSON 格式返回，不要添加任何其他文字说明：
 
@@ -222,17 +230,23 @@ def render_tab(api_key):
     Args:
         api_key: DashScope API Key
     """
-    st.markdown("### 🔬 单条工单归因分析")
-    st.caption("输入单条用户反馈/工单内容，由 L2 技术支持智能体调用工具（发版记录/已知缺陷/API SOP）进行归因分析")
+    st.markdown("# 🔬 单票诊断实验室")
+    st.caption("单条日志或客诉的定向归因与行动建议（Dry-run 可选写入大盘）")
 
     user_input = st.text_area(
-        "📝 请输入工单内容或用户反馈",
+        "客诉或日志原文",
         placeholder="例如：昨天还好好的，今天早上 USPS 的轨迹全不更新了！",
         height=100,
         key="manual_review_input"
     )
-    
-    analyze_button = st.button("🚀 开始归因分析", use_container_width=True, key="analyze_btn_manual")
+
+    write_to_dashboard = st.checkbox(
+        "将此测试数据写入正式大盘统计 (取消勾选则为 Dry-run 测试)",
+        value=False,
+        key="sandbox_write_to_dashboard"
+    )
+
+    analyze_button = st.button("开始定向分析", width="stretch", key="analyze_btn_manual")
     
     if analyze_button:
         # 检查输入
@@ -260,18 +274,17 @@ def render_tab(api_key):
             )
         
         st.success("✅ 分析完成！")
-        
-        # 显示分析结果
-        st.markdown("---")
+
+        st.markdown('<div class="ro-section-gap" aria-hidden="true"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 分析结果")
-        
+
         col_left, col_right = st.columns([1, 1])
-        
+
         with col_left:
-            st.markdown("##### 💬 用户反馈")
+            st.markdown("### 用户反馈")
             st.info(user_input)
-            
-            st.markdown("##### 🤖 AI 判定结论")
+
+            st.markdown("### AI 判定结论")
             if "✅" in conclusion:
                 st.success(conclusion)
             elif "⚠️" in conclusion:
@@ -282,31 +295,31 @@ def render_tab(api_key):
                 st.info(conclusion)
         
         with col_right:
-            st.markdown("##### 📖 工具/知识库证据")
+            st.markdown("### 工具与知识库证据")
             if len(spec_match) > 500:
                 with st.expander("📄 查看完整证据内容", expanded=True):
-                    st.markdown(spec_match)
+                    try:
+                        st.info(spec_match, icon="📖")
+                    except TypeError:
+                        st.info(spec_match)
             else:
-                st.markdown(f"<div style='background-color: #f0f9ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #0ea5e9;'>{spec_match}</div>", unsafe_allow_html=True)
-            
-            # 显示证据来源
+                try:
+                    st.info(spec_match, icon="📖")
+                except TypeError:
+                    st.info(spec_match)
+
             if source_docs:
                 st.markdown("")
                 with st.expander(f"📚 检索到的证据来源 ({len(source_docs)} 条)", expanded=False):
                     for i, doc in enumerate(source_docs, 1):
-                        st.markdown(f"**证据 {i}:**")
-                        st.text_area(
-                            label="",
-                            value=doc,
-                            height=150,
-                            key=f"manual_source_doc_{i}",
-                            disabled=True,
-                            label_visibility="collapsed"
+                        st.markdown(f"**证据 {i}**")
+                        st.markdown(
+                            "```text\n"
+                            + (doc if isinstance(doc, str) else str(doc)).strip()
+                            + "\n```"
                         )
-                        if i < len(source_docs):
-                            st.markdown("---")
-        
-        st.markdown("---")
+
+        st.markdown('<div class="ro-section-gap" aria-hidden="true"></div>', unsafe_allow_html=True)
         st.markdown("### 💡 行动建议")
 
         action_plan = generate_action_plan(
@@ -342,26 +355,26 @@ def render_tab(api_key):
             with st.expander(f"{type_icon} **{title}** · {priority_icon} {priority} · {action_type}", expanded=True):
                 st.markdown(f"**优先级：** {priority}")
                 st.markdown(f"**类型：** {action_type}")
-                st.markdown(f"**内容：**")
+                st.markdown("**正文：**")
                 if len(content) > 500:
-                    st.text_area("", value=content, height=150, disabled=True, key="manual_action_content", label_visibility="collapsed")
+                    st.markdown("```text\n" + content.strip() + "\n```")
                 else:
                     st.markdown(content)
                 
                 # Mock 按钮
                 if action_type == "Jira Ticket":
-                    if st.button("🚀 推送至 Jira", key="manual_jira", use_container_width=True):
+                    if st.button("🚀 推送至 Jira", key="manual_jira", width="stretch"):
                         ticket_id = f"RO-2025-{random.randint(800, 999)}"
                         st.toast(f"✅ 工单已创建！Ticket ID: {ticket_id}", icon="🎉")
                 elif action_type == "Doc Update":
-                    if st.button("📝 创建 Notion Task", key="manual_notion", use_container_width=True):
+                    if st.button("📝 创建 Notion Task", key="manual_notion", width="stretch"):
                         st.toast("✅ Notion 任务已创建！", icon="🎉")
                 elif action_type == "Email Draft":
-                    if st.button("📧 复制邮件", key="manual_email", use_container_width=True):
+                    if st.button("📧 复制邮件", key="manual_email", width="stretch"):
                         st.toast("✅ 邮件内容已复制到剪贴板！", icon="🎉")
                 elif action_type == "Meeting":
-                    if st.button("📅 创建会议", key="manual_meeting", use_container_width=True):
+                    if st.button("📅 创建会议", key="manual_meeting", width="stretch"):
                         st.toast("✅ 会议已创建！", icon="🎉")
     else:
-        st.info("👆 请输入工单内容并点击「开始归因分析」按钮")
+        st.caption("输入客诉原文后点击「开始定向分析」。")
 

@@ -66,8 +66,11 @@ def node_monitor(state: TicketState) -> TicketState:
     if not os.path.isabs(main_path):
         main_path = os.path.join(os.getcwd(), main_path)
 
-    # 输入源：增量文件存在则从中随机读取；否则从主 CSV 读取（与原有逻辑一致）
-    csv_path = inc_path if os.path.isfile(inc_path) else main_path
+    # 输入源：seed 模式强制使用指定 CSV；否则增量存在则用增量，否则用主 CSV
+    if MonitorConfig.SEED_CSV:
+        csv_path = os.path.join(os.getcwd(), MonitorConfig.SEED_CSV) if not os.path.isabs(MonitorConfig.SEED_CSV) else MonitorConfig.SEED_CSV
+    else:
+        csv_path = inc_path if os.path.isfile(inc_path) else main_path
     all_loaded = load_tickets_from_csv(csv_path, max_count=100)
     if not all_loaded:
         log_message = "⚠️ 工单输入源：未找到工单文件或文件为空"
@@ -77,9 +80,10 @@ def node_monitor(state: TicketState) -> TicketState:
             "logs": [log_message],
         }
 
-    # 随机打乱后依次取未处理工单，直到达到本批数量
-    random.shuffle(all_loaded)
-    need = MonitorConfig.MIN_TICKETS_PER_BATCH
+    # 随机打乱后依次取未处理工单，直到达到本批数量（seed 模式取全部）
+    if not MonitorConfig.SEED_CSV:
+        random.shuffle(all_loaded)
+    need = len(all_loaded) if MonitorConfig.SEED_CSV else MonitorConfig.MIN_TICKETS_PER_BATCH
     for t in all_loaded:
         tid = t["ticket_id"]
         if db.exists(tid) or tid in processed_ids:
@@ -92,6 +96,8 @@ def node_monitor(state: TicketState) -> TicketState:
             "risk_level": None,
             "urgency_level": t.get("urgency_level"),
             "category": t.get("category"),
+            "status": "pending",
+            "is_test": False,
         })
         new_tickets.append({
             "ticket_id": tid,
@@ -105,9 +111,12 @@ def node_monitor(state: TicketState) -> TicketState:
         if len(new_tickets) >= need:
             break
 
-    log_message = f"📅 工单输入源：{csv_path} | 本次新增 {len(new_tickets)} 条工单"
     if new_tickets:
-        log_message += f" | ID: {[r['ticket_id'] for r in new_tickets]} | ✅ 已入库"
+        ticket_ids = [r["ticket_id"] for r in new_tickets]
+        joined_ids = ", ".join(ticket_ids)
+        log_message = f"📥 成功拉取 {len(new_tickets)} 条增量工单 | ID: {joined_ids} ✅ 已入库"
+    else:
+        log_message = "⚠️ 本次未拉取到新工单（可能已全部处理）"
 
     return {
         "incr_tickets": new_tickets,

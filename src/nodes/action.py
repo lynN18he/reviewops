@@ -71,11 +71,18 @@ def generate_email_node(state: TicketState) -> TicketState:
         is_known = route.get("route_type") == KNOWN_ISSUE
         jira_id = route.get("jira_id", "")
 
+        anti_hallucination = """
+【防幻觉铁律】撰写操作步骤或向客户解释时，必须 100% 忠于下方「证据」中给出的知识库原文表述。
+绝对禁止擅自脑补或捏造知识库中不存在的具体数值、日期、时间戳、Unix 时间戳或举例（例如禁止编造 1717023600 这类数字）。
+若原文没有给出示例，只陈述规则与步骤，不要虚构示例；可用「请按控制台显示的实际时间为准」等泛化表述替代具体数字。"""
+
         if is_known and jira_id:
             prompt = f"""请为以下「已知缺陷」工单生成一封给客户的邮件（纯正文，不要 JSON）。
 要求：必须包含「这是平台已知问题，对应工单编号 {jira_id}，研发正在抢修中」的语义，并给出临时替代方案（Workaround）。
+重要：只输出邮件正文，不要包含「用户反馈：」或重复客户原话，界面已单独展示。
+{anti_hallucination}
 
-用户反馈：{ticket_content}
+客户原话（供参考）：{ticket_content}
 归因结论：{conclusion}
 原因：{reason}
 证据：{evidence}
@@ -84,10 +91,13 @@ def generate_email_node(state: TicketState) -> TicketState:
         else:
             prompt = f"""请为以下「客户配置/Token 问题」工单生成一封带 SOP 步骤的邮件（纯正文）。
 要求：引导客户按 SOP 重新配置/授权，不要升级研发。
+重要：只输出邮件正文，不要包含「用户反馈：」或重复客户原话，界面已单独展示。
+{anti_hallucination}
 
-用户反馈：{ticket_content}
+客户原话（供参考）：{ticket_content}
 归因结论：{conclusion}
 原因：{reason}
+证据：{evidence}
 
 请直接输出邮件正文（可分段），不要其他说明。"""
 
@@ -95,7 +105,7 @@ def generate_email_node(state: TicketState) -> TicketState:
             resp = llm.invoke([HumanMessage(content=prompt)])
             content = (resp.content if hasattr(resp, "content") else str(resp)).strip()
         except Exception:
-            content = f"用户反馈：{ticket_content}\n归因：{conclusion}\n请按 SOP 重新配置或联系支持。"
+            content = f"归因：{conclusion}\n请按 SOP 重新配置或联系支持。"
             if is_known and jira_id:
                 content = f"这是平台已知问题（工单编号 {jira_id}），研发正在抢修中。\n\n{content}"
 
@@ -139,8 +149,9 @@ def generate_jira_node(state: TicketState) -> TicketState:
         evidence = rag.get("evidence", "")
 
         prompt = f"""请为以下「新发版导致的 Bug」生成一条 P0 Jira 工单（只返回 JSON，不要其他说明）。
+重要：content 字段只写问题描述与复现步骤，不要包含「用户反馈：」或重复客户原话。
 
-用户反馈：{ticket_content}
+客户原话（供参考）：{ticket_content}
 归因结论：{conclusion}
 原因：{reason}
 证据：{evidence}
@@ -163,7 +174,7 @@ JSON 格式：
             content = result.get("content", ticket_content)
         except Exception:
             title = f"P0 新发版回归-{ticket_id}"
-            content = f"用户反馈：{ticket_content}\n归因：{conclusion}"
+            content = f"归因：{conclusion}\n请研发排查。"
 
         plan = {
             "ticket_id": ticket_id,
@@ -201,7 +212,10 @@ def escalate_human_node(state: TicketState) -> TicketState:
             "ticket_id": ticket_id,
             "action_type": "Escalate",
             "title": f"转交 L2 人工-{ticket_id}",
-            "content": "Agent 无法从知识库与报错中做出明确诊断，已转交 L2 技术支持人工处理。",
+            "content": (
+                "该客诉涉及未知盲区或知识库无高匹配依据，已超出 AI 自动诊断范围，"
+                "建议直接转交 L2 研发团队排查底层日志与业务上下文。"
+            ),
             "priority": "High",
         }
         action_plans.append(plan)

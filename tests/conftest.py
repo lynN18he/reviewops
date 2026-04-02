@@ -12,7 +12,7 @@ def mock_env_vars():
     """自动 mock 环境变量，避免测试时依赖真实 API Key"""
     with patch.dict(os.environ, {
         "DASHSCOPE_API_KEY": "test-api-key-for-testing",
-        "LLM_MODEL": "qwen-plus",
+        "LLM_MODEL": "qwen3-max-2026-01-23",
         "LLM_TEMPERATURE": "0",
         "EMBEDDING_MODEL": "text-embedding-v3",
         "VECTOR_DB_PATH": "./test_chroma_db",

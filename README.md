@@ -105,7 +105,7 @@ reviewops/
 
 ```bash
 # .env 文件
-LLM_MODEL=qwen-plus              # LLM 模型名称
+LLM_MODEL=qwen3-max-2026-01-23            # LLM 模型名称
 LLM_TEMPERATURE=0                # 温度参数（0-1）
 ```
 
@@ -150,7 +150,7 @@ ACTION_DEFAULT_PRIORITY=Medium     # 默认优先级
 - **RAG 框架**：LangChain
 - **向量数据库**：ChromaDB
 - **Embedding 模型**：阿里云 DashScope (text-embedding-v3)
-- **LLM 模型**：阿里云千问 (qwen-plus)
+- **LLM 模型**：阿里云千问 (qwen3-max-2026-01-23)
 
 ## 📊 核心功能
 
