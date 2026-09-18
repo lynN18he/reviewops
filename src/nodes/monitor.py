@@ -1,202 +1,290 @@
 """
-监控节点：检测新评论
+监控节点：检测新工单
+增量模式按 incremental_tickets.csv 的 Batch_ID 顺序逐批拉取（不随机）；冷启动数据见 cold_start_tickets.csv。
 """
 
+import os
 import time
-import random
-from src.state import ReviewState
-from src.config import MonitorConfig
+from typing import Any, Dict, List, Optional
+
+from src.state import TicketState
+from src.config import MonitorConfig, resolve_repo_relative_path
 from src.services.database import get_database
+from src.utils import normalize_expected_ground_truth_id
 
 
-# ==================== Mock 数据池 ====================
-# 优化后的 Mock 数据，更符合 RAG 场景
-# 包含正面、负面、中性评论，便于测试各种场景
-MOCK_DATA_POOL = {
-    # 负面评论池（rating 1-2）
-    "negative": [
-        # 案例 1：产品缺陷 - 电池续航虚标
-        {
-            "base_id": 101,
-            "user_id": "user_001",
-            "review_text": "标称续航45分钟，实际只能飞20多分钟，续航严重虚标，感觉被欺骗了。多次测试都是这样，明显是产品参数造假。",
-            "rating": 1
-        },
-        # 案例 2：产品缺陷 - 云台开机自检失败
-        {
-            "base_id": 102,
-            "user_id": "user_002",
-            "review_text": "云台开机自检失败，画面一直抖动，重启后问题依然存在，怀疑是硬件质量问题。已经返修一次了，还是同样的问题。",
-            "rating": 1
-        },
-        # 案例 3：用户误解 - 夜间飞行避障失效
-        {
-            "base_id": 103,
-            "user_id": "user_003",
-            "review_text": "夜间飞行时避障功能完全失效，差点撞墙，说明书上也没明确说明夜间不支持避障。",
-            "rating": 2
-        },
-        # 案例 4：用户误解 - 运动模式下无法避障
-        {
-            "base_id": 104,
-            "user_id": "user_004",
-            "review_text": "运动模式下避障功能不工作，差点撞树。说明书里没有明确说明运动模式会关闭避障，这是设计缺陷还是我理解错了？",
-            "rating": 2
-        },
-        # 案例 5：无关噪音 - 快递慢（应在 Filter 阶段被过滤，或归为 Other）
-        {
-            "base_id": 105,
-            "user_id": "user_005",
-            "review_text": "快递包装破损，等了很久才收到，物流体验很差。",
-            "rating": 2
-        }
-    ],
-    # 正面评论池（rating 4-5）
-    "positive": [
-        {
-            "base_id": 201,
-            "user_id": "user_101",
-            "review_text": "产品非常满意！画质清晰，稳定性很好，续航也达到了宣传的标准。操作简单，新手也能快速上手。强烈推荐！",
-            "rating": 5
-        },
-        {
-            "base_id": 202,
-            "user_id": "user_102",
-            "review_text": "性价比很高，功能齐全，避障系统很灵敏，拍摄效果超出预期。客服态度也很好，有问题及时解决。",
-            "rating": 5
-        },
-        {
-            "base_id": 203,
-            "user_id": "user_103",
-            "review_text": "整体体验不错，画质清晰，云台稳定，电池续航基本符合预期。虽然有些小问题，但总体满意。",
-            "rating": 4
-        },
-        {
-            "base_id": 204,
-            "user_id": "user_104",
-            "review_text": "产品做工精细，飞行稳定，拍摄效果很好。说明书清晰易懂，上手很快。值得购买！",
-            "rating": 4
-        }
-    ],
-    # 中性评论池（rating 3）
-    "neutral": [
-        {
-            "base_id": 301,
-            "user_id": "user_201",
-            "review_text": "产品还可以，画质一般，稳定性还行。价格适中，但功能没有特别突出的地方。",
-            "rating": 3
-        }
-    ]
-}
+def _ticket_dict_from_row(row: Any) -> Optional[Dict]:
+    """从 CSV 行构造工单 dict（兼容 pandas Series / dict）。"""
+    get = row.get if hasattr(row, "get") else lambda k, d=None: row[k] if k in row else d
+    tid = str(get("Ticket_ID", "") or "").strip()
+    if not tid:
+        return None
+    msg = str(get("User_Message", "") or "").strip()
+    if not msg:
+        return None
+    out: Dict = {
+        "ticket_id": tid,
+        "ticket_content": msg,
+        "user_id": f"ticket_{tid}",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        "urgency_level": None,
+        "category": None,
+    }
+    gt = normalize_expected_ground_truth_id(get("Expected_Ground_Truth_ID", None))
+    if gt:
+        out["expected_ground_truth_id"] = gt
+    tc = get("True_Category", None)
+    if tc is not None and str(tc).strip() and str(tc).strip().lower() != "nan":
+        out["true_category"] = str(tc).strip()
+    et = get("Expected_Tool", None)
+    if et is not None and str(et).strip() and str(et).strip().lower() != "nan":
+        out["expected_tool"] = str(et).strip()
+    return out
 
 
-def node_monitor(state: ReviewState) -> ReviewState:
+def _max_batch_id_from_csv(csv_path: str) -> int:
+    if not os.path.isfile(csv_path):
+        return 1
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(csv_path)
+        if "Batch_ID" not in df.columns:
+            return 1
+        m = pd.to_numeric(df["Batch_ID"], errors="coerce").max()
+        return int(m) if m == m and m is not None else 1
+    except Exception:
+        return 1
+
+
+def load_incremental_batch(csv_path: str, batch_id: int) -> List[dict]:
     """
-    节点 1: 监控新评论
-    动态模拟生成器：从 MOCK_DATA_POOL 随机采样，并添加微秒级时间戳确保唯一性
-    实现增量模拟：检查数据库，只有不存在的数据才入库
-    
-    测试优化：确保每次增量 >= 2 条评论，其中至少 1 条为正面评论
+    读取增量 CSV 中指定 Batch_ID 的全部工单（行顺序与文件一致，不随机）。
+    若无 Batch_ID 列则退化为整表仅 batch_id==1 时返回全部行。
     """
-    # 获取数据库管理器
-    db = get_database()
-    
-    # 获取已处理的ID集合（用于内存去重，作为额外保障）
-    processed_ids = set(state.get("processed_ids", []))
-    
-    # 使用微秒级时间戳（time.time_ns()）确保每次运行生成的ID绝对唯一
-    current_timestamp_ns = time.time_ns()  # 纳秒级时间戳，确保唯一性
-    new_reviews = []
-    new_processed_ids = []
-    
-    # 测试优化：确保每次至少生成指定数量的评论，且至少包含 1 条正面评论（如果配置要求）
-    # 1. 首先确保至少选择 1 条正面评论（如果配置要求）
-    if MonitorConfig.MUST_HAVE_POSITIVE and MOCK_DATA_POOL["positive"]:
-        positive_template = random.choice(MOCK_DATA_POOL["positive"])
-        unique_suffix = f"{current_timestamp_ns}_{random.randint(1000, 9999)}"
-        review_id = f"{positive_template['base_id']}_{unique_suffix}"
-        
-        # 检查数据库：只有不存在的数据才处理
-        if not db.exists(review_id) and review_id not in processed_ids:
-            # 准备评论数据
-            review_data = {
-                "review_id": review_id,
-                "content": positive_template['review_text'],
-                "source": "mock",
-                "rating": positive_template['rating'],
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                "risk_level": None  # 初始时风险等级未知，后续由 Filter 节点确定
-            }
-            
-            # 入库
-            db.add_review(review_data)
-            
-            # 构建返回给 Graph 的 review 对象
-            review = {
-                "review_id": review_id,
-                "user_id": positive_template['user_id'],
-                "timestamp": review_data["timestamp"],
-                "review_text": positive_template['review_text'],
-                "rating": positive_template['rating']
-            }
-            new_reviews.append(review)
-            new_processed_ids.append(review_id)
-    
-    # 2. 再从负面或中性评论中随机选择至少 1 条（确保总数 >= 配置的最小值）
-    remaining_needed = max(1, MonitorConfig.MIN_REVIEWS_PER_BATCH - len(new_reviews))
-    all_other_templates = MOCK_DATA_POOL["negative"] + MOCK_DATA_POOL["neutral"]
-    
-    if all_other_templates:
-        # 随机选择剩余需要的评论数量（可以多选几条增加随机性）
-        additional_count = random.randint(remaining_needed, min(remaining_needed + 1, len(all_other_templates)))
-        sampled_others = random.sample(all_other_templates, min(additional_count, len(all_other_templates)))
-        
-        for template in sampled_others:
-            unique_suffix = f"{current_timestamp_ns}_{random.randint(1000, 9999)}"
-            review_id = f"{template['base_id']}_{unique_suffix}"
-            
-            # 检查数据库：只有不存在的数据才处理
-            if db.exists(review_id) or review_id in processed_ids:
-                continue
-            
-            # 准备评论数据
-            review_data = {
-                "review_id": review_id,
-                "content": template['review_text'],
-                "source": "mock",
-                "rating": template['rating'],
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                "risk_level": None  # 初始时风险等级未知，后续由 Filter 节点确定
-            }
-            
-            # 入库
-            db.add_review(review_data)
-            
-            # 构建返回给 Graph 的 review 对象
-            review = {
-                "review_id": review_id,
-                "user_id": template['user_id'],
-                "timestamp": review_data["timestamp"],
-                "review_text": template['review_text'],
-                "rating": template['rating']
-            }
-            new_reviews.append(review)
-            new_processed_ids.append(review_id)
-    
-    # 模拟时间推进感
-    current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    positive_count = sum(1 for r in new_reviews if r.get('rating', 0) >= 4)
-    negative_count = sum(1 for r in new_reviews if r.get('rating', 0) < 3)
-    neutral_count = len(new_reviews) - positive_count - negative_count
-    log_message = f"📅 模拟时间推进：{current_time_str} | 检测到 {len(new_reviews)} 条新增评论"
-    log_message += f" (正面: {positive_count} 条, 负面: {negative_count} 条, 中性: {neutral_count} 条)"
-    if new_reviews:
-        log_message += f" | ID: {[r['review_id'] for r in new_reviews]}"
-        log_message += f" | ✅ 已入库 {len(new_reviews)} 条新评论"
-    
+    if not os.path.isfile(csv_path):
+        return []
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(csv_path)
+        if "Ticket_ID" not in df.columns or "User_Message" not in df.columns:
+            return []
+        if "Batch_ID" not in df.columns:
+            if int(batch_id) != 1:
+                return []
+            rows = []
+            for _, row in df.iterrows():
+                t = _ticket_dict_from_row(row)
+                if t:
+                    rows.append(t)
+            return rows
+        bids = pd.to_numeric(df["Batch_ID"], errors="coerce")
+        sub = df[bids == int(batch_id)]
+        rows = []
+        for _, row in sub.iterrows():
+            t = _ticket_dict_from_row(row)
+            if t:
+                rows.append(t)
+        return rows
+    except Exception:
+        return []
+
+
+def load_tickets_from_csv(csv_path: str, max_count: int = 50) -> List[dict]:
+    """
+    从 CSV 读取工单列表（表头：Ticket_ID, User_Message；可选 Batch_ID, Expected_Ground_Truth_ID 等）。
+    用于 SEED 模式或非增量主文件；按文件行序，至多 max_count 条。
+    """
+    if not os.path.isfile(csv_path):
+        return []
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(csv_path)
+        if "Ticket_ID" not in df.columns or "User_Message" not in df.columns:
+            return []
+        rows: List[dict] = []
+        for _, row in df.iterrows():
+            t = _ticket_dict_from_row(row)
+            if t:
+                rows.append(t)
+            if len(rows) >= max_count:
+                break
+        return rows
+    except Exception:
+        return []
+
+
+def _pending_cold_incr_tickets(main_path: str, db) -> List[dict]:
+    """
+    冷启动 CSV 中已在库内、且仍为 pending 且无 RAG 结论的工单。
+    在存在 incremental_tickets.csv 时，增量批次本身不含 CS-*，需前置并入本批流水线。
+    """
+    if not main_path or not os.path.isfile(main_path):
+        return []
+    out: List[dict] = []
+    for t in load_tickets_from_csv(main_path, max_count=500):
+        tid = (t.get("ticket_id") or "").strip()
+        if tid and db.exists(tid) and db.is_pending_needs_analysis(tid):
+            out.append(t)
+    return out
+
+
+def _incr_payload_from_ticket_dict(t: Dict) -> Dict:
+    """与 monitor 写入 incr_tickets 的结构一致。"""
     return {
-        "raw_reviews": new_reviews,
-        "processed_ids": new_processed_ids,
-        "logs": [log_message]
+        "ticket_id": t["ticket_id"],
+        "ticket_content": t["ticket_content"],
+        "user_id": t["user_id"],
+        "timestamp": t["timestamp"],
+        "urgency_level": t.get("urgency_level"),
+        "category": t.get("category"),
+        **(
+            {"expected_ground_truth_id": t["expected_ground_truth_id"]}
+            if t.get("expected_ground_truth_id")
+            else {}
+        ),
+        **({"true_category": t["true_category"]} if t.get("true_category") else {}),
+        **({"expected_tool": t["expected_tool"]} if t.get("expected_tool") else {}),
     }
 
+
+def node_monitor(state: TicketState) -> TicketState:
+    """
+    节点 1: 监控新工单
+    - SEED_CSV：从指定 CSV 顺序读取（全量/上限由 load_tickets_from_csv 控制）。
+    - 增量：从 TICKETS_INCREMENTAL_CSV 按 monitor_next_batch_id 读取整批，不随机；批次号在状态中轮转。
+    """
+    db = get_database()
+    new_tickets: List[dict] = []
+    new_processed_ids: List[str] = []
+
+    inc_path = resolve_repo_relative_path(MonitorConfig.TICKETS_INCREMENTAL_CSV)
+    main_path = resolve_repo_relative_path(MonitorConfig.TICKETS_CSV_PATH)
+
+    if MonitorConfig.SEED_CSV:
+        csv_path = resolve_repo_relative_path(MonitorConfig.SEED_CSV)
+        all_loaded = load_tickets_from_csv(csv_path, max_count=500)
+        use_incremental_batch = False
+        current_batch_id: Optional[int] = None
+        next_batch_id: Optional[int] = None
+    else:
+        csv_path = inc_path if os.path.isfile(inc_path) else main_path
+        use_incremental_batch = os.path.isfile(inc_path) and csv_path == inc_path
+        cold_pending: List[dict] = []
+        if use_incremental_batch:
+            bmax = _max_batch_id_from_csv(inc_path)
+            current_batch_id = int(state.get("monitor_next_batch_id") or 1)
+            if current_batch_id < 1:
+                current_batch_id = 1
+            if current_batch_id > bmax:
+                current_batch_id = 1
+            inc_part = load_incremental_batch(inc_path, current_batch_id)
+            cold_pending = _pending_cold_incr_tickets(main_path, db)
+            all_loaded = cold_pending + inc_part
+            next_batch_id = current_batch_id + 1 if current_batch_id < bmax else 1
+        else:
+            all_loaded = load_tickets_from_csv(csv_path, max_count=100)
+            current_batch_id = None
+            next_batch_id = None
+
+    if not all_loaded:
+        batch_note = (
+            f" | 批次 Batch_ID={current_batch_id}"
+            if use_incremental_batch and current_batch_id is not None
+            else ""
+        )
+        src_note = (
+            f"incremental={inc_path}（exists={os.path.isfile(inc_path)}）, "
+            f"main={main_path}（exists={os.path.isfile(main_path)}）"
+        )
+        log_message = (
+            "⚠️ 工单输入源无数据"
+            f"{batch_note} | {src_note} | 原因：未找到工单文件、当前批次无数据或文件为空"
+        )
+        out: dict = {
+            "incr_tickets": [],
+            "processed_ids": [],
+            "logs": [log_message],
+        }
+        if use_incremental_batch and next_batch_id is not None:
+            out["monitor_next_batch_id"] = next_batch_id
+        return out
+
+    if MonitorConfig.SEED_CSV:
+        need = len(all_loaded)
+    elif use_incremental_batch:
+        need = len(all_loaded)
+    else:
+        need = min(len(all_loaded), MonitorConfig.MIN_TICKETS_PER_BATCH)
+
+    source_tag = (
+        "incremental_tickets_csv"
+        if use_incremental_batch
+        else ("seed_csv" if MonitorConfig.SEED_CSV else "tickets_csv")
+    )
+
+    for t in all_loaded:
+        tid = t["ticket_id"]
+        if db.exists(tid):
+            # 已在库：仅「仍待 RAG/行动」的冷启动单可再次进入本批流水线（避免增量模式下 CS-* 永远卡住）
+            if db.is_pending_needs_analysis(tid):
+                new_tickets.append(_incr_payload_from_ticket_dict(t))
+                new_processed_ids.append(tid)
+                if len(new_tickets) >= need:
+                    break
+            continue
+        db.add_ticket({
+            "ticket_id": tid,
+            "ticket_content": t["ticket_content"],
+            "source": source_tag,
+            "timestamp": t["timestamp"],
+            "risk_level": None,
+            "urgency_level": t.get("urgency_level"),
+            "category": t.get("category"),
+            "status": "pending",
+            "is_test": False,
+        })
+        new_tickets.append(_incr_payload_from_ticket_dict(t))
+        new_processed_ids.append(tid)
+        if len(new_tickets) >= need:
+            break
+
+    if new_tickets:
+        ticket_ids = [r["ticket_id"] for r in new_tickets]
+        joined_ids = ", ".join(ticket_ids)
+        batch_note = (
+            f" | 批次 Batch_ID={current_batch_id}"
+            if use_incremental_batch and current_batch_id is not None
+            else ""
+        )
+        cold_note = ""
+        if use_incremental_batch and cold_pending:
+            cold_note = f" | 含冷启动待分析 {len(cold_pending)} 条"
+        log_message = (
+            f"📥 成功拉取 {len(new_tickets)} 条工单{batch_note}{cold_note} | "
+            f"输入源: {os.path.basename(csv_path)} | ID: {joined_ids} ✅ 已入库"
+        )
+    else:
+        batch_note = (
+            f" | 批次 Batch_ID={current_batch_id}"
+            if use_incremental_batch and current_batch_id is not None
+            else ""
+        )
+        src_name = os.path.basename(csv_path) if csv_path else "（未知）"
+        total_loaded = len(all_loaded) if all_loaded else 0
+        log_message = (
+            f"⚠️ 本次未拉取到新工单{batch_note} | 输入源: {src_name} | "
+            f"本批读取到 {total_loaded} 条，但均已在库中或无需再次分析"
+        )
+
+    result: dict = {
+        "incr_tickets": new_tickets,
+        "processed_ids": new_processed_ids,
+        "logs": [log_message],
+    }
+    if use_incremental_batch and next_batch_id is not None:
+        result["monitor_next_batch_id"] = next_batch_id
+
+    return result

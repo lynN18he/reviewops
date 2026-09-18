@@ -6,9 +6,12 @@
 tests/
 ├── __init__.py
 ├── conftest.py              # Pytest 配置和共享 fixtures
-├── test_state.py            # 状态定义和 reducer 测试
+├── test_state.py            # 状态字段和路由枚举测试
 ├── test_config.py           # 配置管理测试
 ├── test_utils.py            # 工具函数测试
+├── test_tools.py            # RAG Tool metadata filter 测试
+├── test_injest_metadata.py  # 知识库 metadata 归类测试
+├── test_database_workflow.py # 工作流状态持久化测试
 ├── test_graph.py            # 工作流图构建测试
 ├── test_nodes_monitor.py    # 监控节点测试
 ├── test_nodes_filter.py     # 筛选节点测试
@@ -41,13 +44,13 @@ pytest tests/test_nodes_monitor.py
 ### 运行特定测试类
 
 ```bash
-pytest tests/test_state.py::TestReducer
+pytest tests/test_state.py::TestTicketState
 ```
 
 ### 运行特定测试函数
 
 ```bash
-pytest tests/test_state.py::TestReducer::test_reducer_merge_logs
+pytest tests/test_state.py::TestTicketState::test_ticket_state_accepts_current_graph_fields
 ```
 
 ### 查看测试覆盖率
@@ -75,8 +78,8 @@ pytest -s
 ### ✅ 已覆盖的模块
 
 1. **src/state.py**
-   - ✅ reducer 函数：日志合并、列表替换、ID 去重合并
-   - ✅ 空状态和空更新处理
+   - ✅ 当前工作流状态字段
+   - ✅ 诊断路由枚举
 
 2. **src/config.py**
    - ✅ 所有配置类的默认值
@@ -92,19 +95,18 @@ pytest -s
    - ✅ 图构建函数（build_graph）
 
 5. **src/nodes/monitor.py**
-   - ✅ 评论生成逻辑
-   - ✅ 正面评论保证
+   - ✅ 从增量 CSV 按 `Batch_ID` 顺序读取工单
+   - ✅ 空文件/无工单处理
    - ✅ 幂等性检查
    - ✅ 日志格式
 
 6. **src/nodes/filter.py**
-   - ✅ 空评论列表处理
+   - ✅ 空工单列表处理
    - ✅ LLM 筛选成功场景
-   - ✅ LLM 失败时的降级逻辑
-   - ✅ 评分阈值筛选
+   - ✅ LLM 失败时的关键词降级逻辑
 
 7. **src/nodes/rag.py**
-   - ✅ 空高危评论处理
+   - ✅ 空高危工单处理
    - ✅ LLM RAG 分析成功场景
    - ✅ JSON 解析错误处理
 
@@ -112,6 +114,14 @@ pytest -s
    - ✅ 空归因结果处理
    - ✅ LLM 生成行动成功场景
    - ✅ JSON 解析错误时的默认值使用
+
+9. **src/tools.py / injest.py**
+   - ✅ RAG Tool 按 `doc_type` 传递 Chroma metadata filter
+   - ✅ SOP / 发版 / Jira 知识 chunk 的 metadata 归类
+
+10. **src/services/database.py**
+   - ✅ `monitor_next_batch_id` 与 `last_run_time` 持久化
+   - ✅ 巡检批次流水账写入与倒序读取
 
 ## 测试策略
 
@@ -145,5 +155,5 @@ pytest -s
 1. **API Key**：测试使用 mock，不需要真实的 API Key
 2. **向量数据库**：RAG 测试不实际创建向量库，测试降级逻辑
 3. **时间依赖**：monitor 节点测试可能因时间戳不同而略有差异，这是正常的
-4. **随机性**：某些测试涉及随机数，结果可能略有不同
+4. **批次顺序**：monitor 节点按 `Batch_ID` 顺序读取增量工单，测试应保持确定性
 

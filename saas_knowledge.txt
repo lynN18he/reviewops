@@ -1,0 +1,319 @@
+# B2B 电商履约与物流追踪 SaaS 内部知识库 (最后更新: 2026-03-03)
+
+---
+
+## 第一部分：标准排查操作指南 (SOP) 与 API 接入文档
+
+### SOP-001: 身份验证与授权失败排查
+- 现象：接口返回 HTTP 401 / 403。
+- 排查：
+  1. 检查 Token 是否过期（90 天）。
+  2. 日志关键字：`HMAC validation failed` → 需重新授权。
+  3. `scope_lacking` → Shopify 权限缺失。
+
+---
+
+### SOP-002: Webhook 回调异常处理
+- 现象：未收到推送。
+- 排查：
+  1. 查看 `webhook_delivery_logs`。
+  2. 必须 3 秒返回 200，否则重试。
+  3. 字段校验：`tracking_number`。
+
+---
+
+### SOP-003: 物流 API 限流
+- SF：500/min  
+- FedEx：300/min  
+- 日志：`rate_limited=true`
+
+---
+
+### SOP-004: 订阅计费异常
+- 现象：功能被锁。
+- 排查：
+  1. `subscriptions.status`
+  2. `billing_charge_failed`
+  3. Stripe webhook 延迟
+
+---
+
+### SOP-005: 跨时区时间异常
+- 排查：
+  1. UTC 存储 → 本地转换
+  2. DST 问题
+  3. 日志：`timezone_mismatch`
+
+---
+
+### SOP-006: WooCommerce 授权失败
+- 检查 API Key 权限
+- 日志：`woocommerce_auth_failed`
+
+---
+
+### SOP-007: Amazon SP-API 授权问题
+- LWA Token 过期
+- `InvalidSignature`
+- 服务器时间误差 >5 分钟
+
+---
+
+### SOP-008: Webhook 积压
+- 检查 Kafka lag
+- 扩容消费者
+- 日志：`webhook_backlog_detected`
+
+---
+
+### SOP-009: 订单同步延迟或丢失排查
+- 现象：商家反馈 Shopify / Amazon 订单未及时同步或部分丢失。
+- 排查链路：
+  1. 检查同步任务队列（Kafka topic: `order_sync_events`）是否存在 backlog。
+  2. 查看消费者 offset lag（>5000 需警惕）。
+  3. 检查 webhook 是否触发（Shopify: `orders/create`）。
+  4. 数据库确认：`orders_raw` 表是否已写入。
+  5. 日志关键字：`order_sync_skipped`、`duplicate_event_detected`。
+
+---
+
+### SOP-010: 运单号更新失败排查
+- 现象：商家更新 tracking number 后前端未生效。
+- 排查链路：
+  1. 检查 API 返回是否成功（HTTP 200 + `success=true`）。
+  2. 查询缓存（Redis key: `tracking:{order_id}`）是否未失效。
+  3. 查看是否命中缓存穿透保护（Bloom Filter）。
+  4. 日志关键字：`cache_not_invalidated`。
+
+---
+
+### SOP-011: 批量导出任务卡死排查
+- 现象：导出任务长时间停留在“处理中”。
+- 排查链路：
+  1. 查询任务表 `export_jobs.status`。
+  2. 检查 worker 是否异常退出（K8s Pod 重启）。
+  3. 查看是否触发 OOM Kill。
+  4. 日志关键字：`export_worker_crashed`。
+
+---
+
+### SOP-012: API 响应变慢排查
+- 现象：接口响应时间 >3s。
+- 排查链路：
+  1. 查看 APM（SkyWalking）trace。
+  2. 判断是否数据库慢查询（>500ms）。
+  3. 检查 Redis 命中率（<80% 需关注）。
+  4. 日志关键字：`slow_query_detected`。
+
+---
+
+### SOP-013: 数据重复创建排查
+- 现象：同一订单被创建多次。
+- 排查链路：
+  1. 检查幂等 key（idempotency_key）。
+  2. 查看 webhook 是否重复触发。
+  3. 检查去重逻辑（Redis SETNX）。
+  4. 日志关键字：`duplicate_insert_attempt`。
+
+---
+
+### SOP-014: 第三方物流状态不更新排查
+- 现象：物流状态长时间停留。
+- 排查链路：
+  1. 检查 carrier API 返回是否为空。
+  2. 查看代理池 IP 是否被封禁。
+  3. 日志关键字：`carrier_response_empty`。
+
+---
+
+### SOP-015: API 签名错误排查
+- 现象：返回 `Invalid Signature`。
+- 排查链路：
+  1. 检查签名算法（HMAC-SHA256）。
+  2. 校验时间戳误差（±300s）。
+  3. 确认参数排序一致。
+  4. 日志关键字：`signature_mismatch`。
+
+---
+
+## 第二部分：近期发版记录 (Release Notes)
+
+### 2026-03-02 [v2.4.1]
+- 修复闰年日期问题
+- 回滚 ETA 模型
+
+---
+
+### 2026-03-01 [v2.4.0]
+- 导出 UI 调整
+- 抓取模块重构
+
+---
+
+### 2026-02-15 [v2.3.9]
+- 移除 PayPal v1
+
+---
+
+### 2026-01-28 [v2.3.8]
+- MySQL 升级至 8.0
+- 只读维护 12 分钟
+
+---
+
+### 2026-01-10 [v2.3.5]
+- Redis 多级缓存上线
+- QPS 提升 3x
+
+---
+
+### 2025-12-20 [v2.3.0]
+- 废弃 v1 API
+- 返回 410 Gone
+
+---
+
+### 2025-12-05 [v2.2.7]
+- 引入熔断机制
+
+---
+
+### 2025-11-18 [v2.2.3]
+- 优化订单查询接口分页性能（OFFSET → Cursor）。
+- 查询延迟降低约 60%。
+
+---
+
+### 2025-11-01 [v2.2.0]
+- 引入多租户隔离（tenant_id）。
+- 修复数据串号风险。
+
+---
+
+### 2025-10-15 [v2.1.5]
+- 新增物流轨迹增量更新机制。
+- 减少全量抓取带宽消耗。
+
+---
+
+## 第三部分：已知缺陷库 (Jira Backlog)
+
+### JIRA-1042: RTL 同步超时
+- Workaround：转英文
+- 状态：排期
+
+---
+
+### JIRA-0899: 运费 OOM
+- Workaround：拆单
+- 状态：Won't Fix
+
+---
+
+### JIRA-0755: PDF 乱码
+- 状态：观察中
+
+---
+
+### JIRA-1123: 缓存脏读
+- Workaround：刷新
+- 状态：处理中
+
+---
+
+### JIRA-1107: 汇率精度误差
+- Workaround：以财务数据为准
+- 状态：修复中
+
+---
+
+### JIRA-1088: 前端内存泄漏
+- Workaround：刷新页面
+- 状态：待发布
+
+---
+
+### JIRA-1071: 巴西 CPF 税号校验缺失
+- 描述：未校验 CPF 导致清关失败。
+- Workaround：商家手动校验格式（11位数字）。
+- 状态：排期中。
+
+---
+
+### JIRA-1059: 大型 CSV 导出超时
+- 描述：导出 >10万行数据时网关返回 504。
+- 根因：同步导出阻塞请求线程。
+- Workaround：拆分导出或使用异步导出接口。
+- 状态：计划引入分片导出。
+
+---
+
+### JIRA-1130: Webhook 重复投递
+- 描述：偶发同一事件被投递 2 次。
+- Workaround：商家做幂等处理。
+- 状态：排查中。
+
+---
+
+### JIRA-1135: Redis 缓存雪崩
+- 描述：缓存同一时间过期导致瞬时高负载。
+- Workaround：手动重启服务或限流。
+- 状态：已优化 TTL 随机化。
+
+---
+
+### JIRA-1141: Kafka 消费延迟
+- 描述：高峰期 lag 激增。
+- Workaround：扩容 consumer。
+- 状态：持续优化。
+
+---
+
+### JIRA-1148: Shopify Webhook 丢失
+- 描述：极少数 webhook 未触发。
+- Workaround：手动补单。
+- 状态：无法稳定复现。
+
+---
+
+### JIRA-1152: API 网关 502
+- 描述：高并发时网关返回 502。
+- Workaround：重试。
+- 状态：排查中。
+
+---
+
+### JIRA-1160: 运费计算误差
+- 描述：边界重量计算错误。
+- Workaround：手动调整。
+- 状态：待修复。
+
+---
+
+### JIRA-1168: 前端分页错乱
+- 描述：翻页后数据重复。
+- Workaround：刷新页面。
+- 状态：已定位。
+
+---
+
+### JIRA-1175: Amazon Token 失效异常
+- 描述：Token 提前过期。
+- Workaround：重新授权。
+- 状态：排查中。
+
+---
+
+### JIRA-1182: SSL 自动续期失败
+- 描述：证书未自动更新。
+- Workaround：手动触发。
+- 状态：修复中。
+
+---
+
+### JIRA-1190: 导出文件损坏
+- 描述：下载后文件无法打开。
+- Workaround：重新导出。
+- 状态：偶发。
+
+---

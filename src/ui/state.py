@@ -9,56 +9,55 @@ import time
 from src.services.database import get_database
 
 
-def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
+def init_session_state(tickets_df: pd.DataFrame, calculate_metrics):
     """
-    初始化 session_state
-    
+    初始化 session_state（工单为 SSOT）
+
     Args:
-        reviews_df: 初始评论数据 DataFrame
-        calculate_metrics: 计算指标的函数
+        tickets_df: 工单数据 DataFrame（含 ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
+        calculate_metrics: 计算指标函数，返回 get_dashboard_metrics() 的 8 元组
     """
-    # 检查并初始化 all_reviews（Single Source of Truth）
-    if 'all_reviews' not in st.session_state:
-        db = get_database()
-        
-        # 优先从数据库加载历史评论数据
-        db_reviews = db.get_all_reviews()
-        
-        if db_reviews:
-            # 从数据库加载：转换为 all_reviews 格式
-            st.session_state.all_reviews = [
+    db = get_database()
+
+    # 检查并初始化 all_tickets（与 Graph 兼容：ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
+    if 'all_tickets' not in st.session_state:
+        db_tickets = db.get_all_tickets()
+        if not db_tickets:
+            # 空库：预载冷启动 CSV 为 pending，大盘/工作台有单可查；跑一轮巡检后写入 RAG/行动
+            db.cold_start_ingest_tickets()
+            db_tickets = db.get_all_tickets()
+        if db_tickets:
+            st.session_state.all_tickets = [
                 {
-                    'review_id': r.get('review_id'),
-                    'user_id': f"user_{r.get('review_id', '').split('_')[0]}",  # 从 review_id 推断
+                    'ticket_id': r.get('ticket_id'),
+                    'user_id': f"ticket_{r.get('ticket_id', '')}" if isinstance(r.get('ticket_id'), str) and not (r.get('ticket_id') or '').startswith('ticket_') else f"user_{str(r.get('ticket_id', ''))[:20]}",
                     'timestamp': r.get('created_at', ''),
-                    'review_text': r.get('content', ''),
-                    'rating': r.get('rating', 0)
+                    'ticket_content': r.get('ticket_content', ''),
+                    'urgency_level': r.get('urgency_level'),
+                    'category': r.get('category'),
                 }
-                for r in db_reviews
+                for r in db_tickets
             ]
         else:
-            # 如果数据库为空，从 CSV 文件加载初始数据（首次运行）
-            st.session_state.all_reviews = reviews_df.to_dict('records')
-        
+            st.session_state.all_tickets = tickets_df.to_dict('records') if not tickets_df.empty else []
         st.session_state.last_run_increment = 0
-        
-        # 初始化指标基准值（用于计算增量）
-        if len(st.session_state.all_reviews) > 0:
-            init_df = pd.DataFrame(st.session_state.all_reviews)
-            if 'rating' in init_df.columns:
-                init_df['rating'] = pd.to_numeric(init_df['rating'], errors='coerce').fillna(0)
-                init_total, init_avg, init_negative = calculate_metrics(init_df)
-                st.session_state['prev_total_reviews'] = init_total
-                st.session_state['prev_avg_rating'] = init_avg
-                st.session_state['prev_negative_ratio'] = init_negative
-            else:
-                st.session_state['prev_total_reviews'] = 0
-                st.session_state['prev_avg_rating'] = 0.0
-                st.session_state['prev_negative_ratio'] = 0.0
+        if len(st.session_state.all_tickets) > 0:
+            init_df = pd.DataFrame(st.session_state.all_tickets)
+            _m = calculate_metrics(init_df, None)
+            if not isinstance(_m, tuple) or len(_m) < 4:
+                raise ValueError(
+                    "calculate_metrics 须至少返回 4 项（建议 8 项含分桶条数）。"
+                )
+            init_total, init_ai, init_esc, init_bug = _m[0], _m[1], _m[2], _m[3]
+            st.session_state['prev_total_tickets'] = init_total
+            st.session_state['prev_ai_resolution_rate'] = init_ai
+            st.session_state['prev_human_escalation_rate'] = init_esc
+            st.session_state['prev_bug_ident_rate'] = init_bug
         else:
-            st.session_state['prev_total_reviews'] = 0
-            st.session_state['prev_avg_rating'] = 0.0
-            st.session_state['prev_negative_ratio'] = 0.0
+            st.session_state['prev_total_tickets'] = 0
+            st.session_state['prev_ai_resolution_rate'] = 0.0
+            st.session_state['prev_human_escalation_rate'] = 0.0
+            st.session_state['prev_bug_ident_rate'] = 0.0
 
     # 初始化 RAG 分析结果存储
     if 'latest_rag_results' not in st.session_state:
@@ -66,14 +65,19 @@ def init_session_state(reviews_df: pd.DataFrame, calculate_metrics):
 
     # 初始化增量巡检相关状态
     if 'last_run_time' not in st.session_state:
-        st.session_state.last_run_time = None
+        st.session_state.last_run_time = db.get_last_run_time()
     if 'incremental_rag_results' not in st.session_state:
         st.session_state.incremental_rag_results = []  # 存储本次巡检的RAG结果
+    if 'monitor_next_batch_id' not in st.session_state:
+        st.session_state.monitor_next_batch_id = db.get_monitor_next_batch_id(default=1)
 
-    # 初始化历史巡检记录（实时风险动态流，Hero 区域使用 session_state）
-    # 历史区在 tab_dashboard 中从数据库读取，无需在此预加载
-    if 'incident_history' not in st.session_state:
-        st.session_state.incident_history = []
+    # 工作台批次流水账（不覆盖，向下堆叠）
+    if 'run_history' not in st.session_state:
+        st.session_state.run_history = db.get_workflow_runs(limit=20)
+
+    # 晨会简报（防丢失）
+    if 'daily_briefing' not in st.session_state:
+        st.session_state.daily_briefing = ""
 
     # 检查是否需要刷新页面以更新数据概览
     if st.session_state.get('need_refresh', False):

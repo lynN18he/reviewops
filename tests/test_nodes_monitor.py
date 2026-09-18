@@ -3,106 +3,154 @@
 """
 
 import pytest
-from unittest.mock import patch
-from src.nodes.monitor import node_monitor, MOCK_DATA_POOL
-from src.state import ReviewState
+from unittest.mock import patch, MagicMock
+from src.nodes.monitor import node_monitor, load_tickets_from_csv
+from src.state import TicketState
+
+
+def _db_mock_fresh():
+    """避免 MagicMock 在布尔上下文中为真，误触发冷启动待分析前缀逻辑。"""
+    db = MagicMock()
+    db.exists.return_value = False
+    db.is_pending_needs_analysis.return_value = False
+    return db
+
+
+def _fake_tickets(n=3):
+    return [
+        {
+            "ticket_id": f"TIK-{100 + i}",
+            "ticket_content": f"工单内容 {i}",
+            "user_id": f"ticket_TIK-{100 + i}",
+            "timestamp": "2026-03-04 12:00:00",
+            "urgency_level": None,
+            "category": None,
+        }
+        for i in range(n)
+    ]
 
 
 class TestNodeMonitor:
     """测试监控节点"""
-    
-    def test_node_monitor_generates_reviews(self):
-        """测试生成评论"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+
+    @patch("src.nodes.monitor.load_incremental_batch")
+    @patch("src.nodes.monitor.get_database")
+    def test_node_monitor_generates_tickets(self, mock_get_db, mock_load_batch):
+        """测试从增量 CSV 按批次读取并生成工单"""
+        mock_load_batch.return_value = _fake_tickets(3)
+        mock_get_db.return_value = _db_mock_fresh()
+
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
-            "processed_ids": []
+            "processed_ids": [],
+            "monitor_next_batch_id": 1,
         }
-        
+
         result = node_monitor(state)
-        
-        assert "raw_reviews" in result
+
+        assert "incr_tickets" in result
         assert "processed_ids" in result
         assert "logs" in result
-        assert len(result["raw_reviews"]) >= 2  # 至少生成 2 条
-        assert len(result["processed_ids"]) == len(result["raw_reviews"])
-    
-    def test_node_monitor_ensures_positive_review(self):
-        """测试确保包含正面评论"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        assert len(result["incr_tickets"]) >= 2
+        assert len(result["processed_ids"]) == len(result["incr_tickets"])
+
+    @patch("src.nodes.monitor.load_incremental_batch")
+    @patch("src.nodes.monitor.get_database")
+    def test_node_monitor_empty_csv_returns_empty(self, mock_get_db, mock_load_batch):
+        """测试增量文件为空时返回无新工单"""
+        mock_load_batch.return_value = []
+        mock_get_db.return_value = _db_mock_fresh()
+
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
-            "processed_ids": []
+            "processed_ids": [],
+            "monitor_next_batch_id": 1,
         }
-        
+
         result = node_monitor(state)
-        
-        # 检查是否有正面评论（rating >= 4）
-        positive_reviews = [r for r in result["raw_reviews"] if r.get("rating", 0) >= 4]
-        assert len(positive_reviews) >= 1
-    
-    def test_node_monitor_idempotency(self):
-        """测试幂等性 - 已处理的ID不会重复生成"""
-        processed_id = "201_1234567890_5678"
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+
+        assert result["incr_tickets"] == []
+        assert result["processed_ids"] == []
+        assert "未找到工单文件" in result["logs"][0] or "无数据" in result["logs"][0]
+
+    @patch("src.nodes.monitor.load_incremental_batch")
+    @patch("src.nodes.monitor.get_database")
+    def test_node_monitor_idempotency(self, mock_get_db, mock_load_batch):
+        """测试已处理 ID 不会重复入库"""
+        mock_load_batch.return_value = _fake_tickets(3)
+        db = _db_mock_fresh()
+        db.exists.side_effect = lambda rid: rid == "TIK-100"
+        mock_get_db.return_value = db
+
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
-            "processed_ids": [processed_id]
+            "processed_ids": ["TIK-100"],
+            "monitor_next_batch_id": 1,
         }
-        
+
         result = node_monitor(state)
-        
-        # 确保不会生成已处理的ID（虽然由于时间戳不同，这个测试可能不够严格）
-        # 但至少验证了 processed_ids 的逻辑
-        assert processed_id not in result["processed_ids"] or len(result["raw_reviews"]) == 0
-    
-    def test_node_monitor_logs_format(self):
+
+        assert "TIK-100" not in result["processed_ids"]
+        assert {t["ticket_id"] for t in result["incr_tickets"]} == {"TIK-101", "TIK-102"}
+
+    @patch("src.nodes.monitor.load_incremental_batch")
+    @patch("src.nodes.monitor.get_database")
+    def test_node_monitor_logs_format(self, mock_get_db, mock_load_batch):
         """测试日志格式"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        mock_load_batch.return_value = _fake_tickets(2)
+        mock_get_db.return_value = _db_mock_fresh()
+
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
-            "processed_ids": []
+            "processed_ids": [],
+            "monitor_next_batch_id": 1,
         }
-        
+
         result = node_monitor(state)
-        
+
         assert len(result["logs"]) > 0
         log_message = result["logs"][0]
-        assert "检测到" in log_message
-        assert "条新增评论" in log_message
-    
-    def test_node_monitor_review_structure(self):
-        """测试生成的评论结构"""
-        state: ReviewState = {
-            "raw_reviews": [],
-            "critical_reviews": [],
+        assert "工单" in log_message
+
+    @patch("src.nodes.monitor.load_incremental_batch")
+    @patch("src.nodes.monitor.get_database")
+    def test_node_monitor_ticket_structure(self, mock_get_db, mock_load_batch):
+        """测试生成的工单结构"""
+        mock_load_batch.return_value = _fake_tickets(2)
+        mock_get_db.return_value = _db_mock_fresh()
+
+        state: TicketState = {
+            "incr_tickets": [],
+            "critical_tickets": [],
             "rag_analysis_results": [],
             "action_plans": [],
             "logs": [],
-            "processed_ids": []
+            "processed_ids": [],
+            "monitor_next_batch_id": 1,
         }
-        
-        result = node_monitor(state)
-        
-        if result["raw_reviews"]:
-            review = result["raw_reviews"][0]
-            assert "review_id" in review
-            assert "user_id" in review
-            assert "timestamp" in review
-            assert "review_text" in review
-            assert "rating" in review
-            assert isinstance(review["rating"], int)
-            assert 1 <= review["rating"] <= 5
 
+        result = node_monitor(state)
+
+        if result["incr_tickets"]:
+            ticket = result["incr_tickets"][0]
+            assert "ticket_id" in ticket
+            assert "user_id" in ticket
+            assert "timestamp" in ticket
+            assert "ticket_content" in ticket
+            assert "urgency_level" in ticket or "category" in ticket

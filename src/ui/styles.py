@@ -9,7 +9,7 @@ import streamlit as st
 def apply_page_config():
     """应用页面配置"""
     st.set_page_config(
-        page_title="ReviewOps · 用户反馈决策中台",
+        page_title="ReviewOps · B2B SaaS 研发智能问诊中台",
         page_icon="🔬",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -30,13 +30,15 @@ def apply_custom_styles():
             --danger: #ef4444;
         }
         
-        /* 指标卡片样式 */
+        /* 指标卡片样式 - 紧凑；四卡统一高度避免「只有总数卡变矮」 */
         [data-testid="stMetric"] {
             background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
-            padding: 1.2rem;
-            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
             border: 1px solid rgba(99, 102, 241, 0.3);
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
+            min-height: 6.35rem;
+            box-sizing: border-box;
         }
         
         [data-testid="stMetric"] label {
@@ -48,65 +50,73 @@ def apply_custom_styles():
             color: #e0e7ff !important;
             font-weight: 700;
         }
-        
-        /* 侧边栏样式 - 优化颜色使其更明显和用户友好 */
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1e293b 0%, #334155 100%) !important;
-            border-right: 2px solid rgba(99, 102, 241, 0.3);
+
+        /* 环比/副行：主题「off」灰字 + 低 opacity 在深底上几乎看不见，强制不透明并略提亮默认字色 */
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] {
+            opacity: 1 !important;
+            font-size: 0.82rem !important;
+            font-weight: 500 !important;
+        }
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] * {
+            opacity: 1 !important;
+        }
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] svg,
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] path {
+            opacity: 1 !important;
         }
         
-        [data-testid="stSidebar"] .stMarkdown h1,
+        /* st.metric 的 help：原生多为浅灰小圆，叠在深蓝渐变上几乎看不见 —— 强制高对比 */
+        [data-testid="stMetric"] button {
+            color: #f8fafc !important;
+            background: rgba(255, 255, 255, 0.14) !important;
+            border: 1px solid rgba(226, 232, 240, 0.55) !important;
+            opacity: 1 !important;
+        }
+        [data-testid="stMetric"] button:hover {
+            background: rgba(255, 255, 255, 0.26) !important;
+            border-color: #e0e7ff !important;
+        }
+        [data-testid="stMetric"] button svg,
+        [data-testid="stMetric"] button path {
+            fill: #f8fafc !important;
+            opacity: 1 !important;
+        }
+        [data-testid="stMetric"] [data-testid="stTooltipIcon"] {
+            color: #f8fafc !important;
+        }
+        [data-testid="stMetric"] a[href="#"],
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] svg,
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] path {
+            color: #f8fafc !important;
+            fill: #f8fafc !important;
+            opacity: 1 !important;
+        }
+        
+        /* 侧栏：品牌底色 + 侧栏内 Markdown 标题可读（信息卡以内联 HTML 为准） */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
+            padding: 0.5rem 0.65rem !important;
+            border-right: 1px solid #334155 !important;
+        }
         [data-testid="stSidebar"] .stMarkdown h2,
         [data-testid="stSidebar"] .stMarkdown h3 {
-            color: #e0e7ff !important;
-            font-weight: 600;
+            color: #f8fafc !important;
         }
-        
-        [data-testid="stSidebar"] .stMarkdown p,
-        [data-testid="stSidebar"] .stMarkdown {
+        [data-testid="stSidebar"] .stCaption,
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
             color: #cbd5e1 !important;
         }
-        
-        [data-testid="stSidebar"] .stInfo {
-            background-color: rgba(99, 102, 241, 0.15) !important;
-            border-left: 3px solid #6366f1 !important;
-            color: #e0e7ff !important;
+        [data-testid="stSidebar"] [data-testid="stRadio"] label,
+        [data-testid="stSidebar"] [data-testid="stRadio"] label span {
+            color: #f1f5f9 !important;
         }
-        
-        [data-testid="stSidebar"] .stSuccess {
-            background-color: rgba(16, 185, 129, 0.15) !important;
-            border-left: 3px solid #10b981 !important;
-            color: #d1fae5 !important;
+        /* 侧边栏导航单选：radiogroup 内段落常为实际可见文案，强制亮白 */
+        [data-testid="stSidebar"] div[role="radiogroup"] p {
+            color: #f8fafc !important;
+            font-size: 15px !important;
         }
-        
-        [data-testid="stSidebar"] .stWarning {
-            background-color: rgba(245, 158, 11, 0.15) !important;
-            border-left: 3px solid #f59e0b !important;
-            color: #fef3c7 !important;
-        }
-        
-        [data-testid="stSidebar"] .stCaption {
-            color: #94a3b8 !important;
-        }
-        
-        [data-testid="stSidebar"] .stDivider {
-            border-color: rgba(99, 102, 241, 0.2) !important;
-        }
-        
-        [data-testid="stSidebar"] input[type="text"],
-        [data-testid="stSidebar"] input[type="password"] {
-            background-color: rgba(30, 41, 59, 0.5) !important;
-            border: 1px solid rgba(99, 102, 241, 0.3) !important;
-            color: #e0e7ff !important;
-        }
-        
-        [data-testid="stSidebar"] input[type="text"]:focus,
-        [data-testid="stSidebar"] input[type="password"]:focus {
-            border-color: #6366f1 !important;
-            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
-        }
-        
-        /* 按钮样式 */
+
+        /* 按钮样式 - 主按钮 */
         .stButton > button {
             background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
             color: white;
@@ -123,27 +133,152 @@ def apply_custom_styles():
             box-shadow: 0 6px 25px rgba(99, 102, 241, 0.5);
         }
         
+        /* 批次 CTA 按钮 - 强制次级样式（白底黑字），消灭紫薯精 */
+        [data-testid="stExpander"] .stButton > button {
+            background: #ffffff !important;
+            color: #374151 !important;
+            border: 1px solid #d1d5db !important;
+            box-shadow: none !important;
+        }
+        [data-testid="stExpander"] .stButton > button:hover {
+            background: #f9fafb !important;
+            border-color: #9ca3af !important;
+            transform: none;
+            box-shadow: none !important;
+        }
+        
+        /* 工单卡片辅助按钮（一键复制回复）- 强制白底灰边，绝不紫色 */
+        [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button {
+            background: #ffffff !important;
+            color: #374151 !important;
+            border: 1px solid #d1d5db !important;
+            box-shadow: none !important;
+        }
+        [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button:hover {
+            background: #f9fafb !important;
+            border-color: #9ca3af !important;
+            transform: none;
+            box-shadow: none !important;
+        }
+        
         /* 表格样式 */
         .stDataFrame {
             border-radius: 12px;
             overflow: hidden;
         }
         
-        /* Expander 样式 */
+        /* st.table（如研发疑难队列）：单元格内换行，避免长段落在同一行横滑 */
+        [data-testid="stTable"] td,
+        [data-testid="stTable"] th {
+            white-space: pre-wrap !important;
+            word-break: break-word;
+            vertical-align: top;
+            max-width: 42vw;
+        }
+        
+        /* Expander 样式 - 中性边框，避免安全批次出现红色视觉污染 */
+        [data-testid="stExpander"] {
+            border: 1px solid rgba(148, 163, 184, 0.3) !important;
+            border-radius: 8px;
+            background: transparent !important;
+        }
         .streamlit-expanderHeader {
-            background: rgba(99, 102, 241, 0.1);
+            background: rgba(148, 163, 184, 0.08) !important;
             border-radius: 8px;
         }
         
-        /* 主标题 */
-        .main-title {
+        /* 模块间留白（替代 hr ---） */
+        .ro-section-gap {
+            height: 1.75rem;
+            min-height: 1.75rem;
+            margin: 0;
+            padding: 0;
+        }
+        .ro-vspace-md {
+            height: 1rem;
+            margin: 0;
+            padding: 0;
+        }
+        /*
+         * 页脚：固定在视口底部；left 与侧栏宽度对齐（展开约 21rem），窄屏铺满。
+         */
+        [data-testid="stAppViewContainer"] .main .block-container {
+            padding-bottom: 4.25rem !important;
+        }
+        .ro-page-footer-muted {
+            position: fixed !important;
+            left: 21rem;
+            right: 0;
+            bottom: 0;
+            z-index: 998;
+            margin: 0 !important;
+            padding: 0.55rem 1.5rem 0.75rem;
+            box-sizing: border-box;
+            border-top: 1px solid rgba(148, 163, 184, 0.2);
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        @media (max-width: 768px) {
+            .ro-page-footer-muted {
+                left: 0 !important;
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+        }
+        @media (prefers-color-scheme: dark) {
+            .ro-page-footer-muted {
+                background: rgba(15, 23, 42, 0.92);
+                border-top-color: rgba(148, 163, 184, 0.15);
+            }
+            .ro-page-footer-muted p {
+                color: rgba(148, 163, 184, 0.65) !important;
+            }
+        }
+        .ro-page-footer-muted p {
+            margin: 0.1rem 0 !important;
+            font-size: 0.6875rem !important;
+            line-height: 1.35 !important;
+            color: rgba(100, 116, 139, 0.72) !important;
+            letter-spacing: 0.03em;
+        }
+        /* 主标题：渐变字 + 大号字重（SaaS 品牌冲击力） */
+        [data-testid="stAppViewContainer"] .stMarkdown h1 {
+            font-size: 2.25rem !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.03em;
+            margin: 0 0 0.2rem 0 !important;
+            line-height: 1.15 !important;
             background: linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            font-size: 2.5rem;
-            font-weight: 800;
-            margin-bottom: 0;
+        }
+        [data-testid="stAppViewContainer"] .stMarkdown h5 {
+            color: #94a3b8 !important;
+            font-weight: 500 !important;
+            font-size: 0.95rem !important;
+            margin: 0 0 0.35rem 0 !important;
+            line-height: 1.4 !important;
+        }
+        [data-testid="stAppViewContainer"] .stMarkdown h2 {
+            font-size: 1.2rem !important;
+            font-weight: 600 !important;
+            letter-spacing: -0.01em;
+            margin: 0.15rem 0 0.6rem 0 !important;
+            line-height: 1.3 !important;
+        }
+        [data-testid="stAppViewContainer"] .stMarkdown h3 {
+            font-size: 1.02rem !important;
+            font-weight: 600 !important;
+            margin: 0.65rem 0 0.35rem 0 !important;
+            line-height: 1.35 !important;
+        }
+        [data-testid="stAppViewContainer"] .stMarkdown h4 { font-size: 0.98rem !important; }
+        [data-testid="stAppViewContainer"] .stMarkdown h5 { font-size: 0.92rem !important; }
+        [data-testid="stAppViewContainer"] .stMarkdown p,
+        [data-testid="stAppViewContainer"] .stMarkdown {
+            font-size: 0.9rem !important;
         }
         
         /* 信息卡片 */
@@ -248,12 +383,12 @@ def apply_custom_styles():
             color: #374151;
         }
         
-        /* 分割线 */
+        /* 分割线 - 紧凑 */
         hr {
             border: none;
             height: 1px;
             background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
-            margin: 2rem 0;
+            margin: 1rem 0;
         }
         
         /* Toast 通知位置调整 - 让弹框更靠近按钮 */

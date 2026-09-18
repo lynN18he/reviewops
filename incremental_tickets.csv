@@ -1,0 +1,51 @@
+Ticket_ID,Batch_ID,User_Message,True_Category,Expected_Tool,Expected_Ground_Truth_ID
+INC-001,1,"导出超过十万行的订单报表，网关直接 504，已经试了三次了，客户那边催着要对账",历史缺陷_Jira,search_known_issues,JIRA-1059
+INC-002,1,"Shopify 那边有没有可能漏推 webhook？我们今天有几十单没进来，手动补了才发现，不是第一次了",历史缺陷_Jira,search_known_issues,JIRA-1148
+INC-003,1,"这个系统能不能做需求，我们想在面板上加一个按 SKU 汇总的库存报表",超纲诉求,none,NONE
+INC-004,1,"你们什么时候支持多币种结算？我们有欧元和英镑的业务",超纲诉求,none,NONE
+INC-005,1,"为啥我昨天导的数和今天对不上，差了几十条，是 bug 还是我操作有问题",纯噪音,none,NONE
+INC-006,2,"日志里 HMAC validation failed 反复出现，token 是上周刚换的，接口一直 401，现在整条链路都断了",配置错误_SOP,search_api_docs_and_sop,SOP-001
+INC-007,2,"webhook 回调收不到，delivery log 里有失败记录，我们服务器响应时间大概 4-5 秒，是不是超时了",配置错误_SOP,search_api_docs_and_sop,SOP-002
+INC-008,2,"高峰期 Kafka lag 一下子涨到两万多，消费者没挂，但就是追不上，每次大促前都这样",历史缺陷_Jira,search_known_issues,JIRA-1141
+INC-009,2,"你们系统有没有 SLA 保障协议，我们甲方要做供应商评审，需要书面材料",超纲诉求,none,NONE
+INC-010,2,"为啥今天登不进去，是你们挂了吗",纯噪音,none,NONE
+INC-011,3,"大批量导出又卡死了，export_jobs 里状态一直是 processing，K8s pod 日志看到 OOM Kill 了好几次",历史缺陷_Jira,search_known_issues,JIRA-1059
+INC-012,3,"同一个 order_created 事件推了两次过来，我们重复创建了订单，幂等 key 好像没拦住",历史缺陷_Jira,search_known_issues,JIRA-1130
+INC-013,3,"能帮我们写一套仓库拣货路径优化算法吗，我们自建了小仓，想降本",超纲诉求,none,NONE
+INC-014,3,"系统响应时间变慢了，但不知道是数据库还是缓存的问题，API 慢查询怎么定位",配置错误_SOP,search_api_docs_and_sop,SOP-012
+INC-015,3,"为什么我账单上这个月多扣了一笔钱，没有任何通知",纯噪音,none,NONE
+INC-016,4,"scope_lacking 报错，Shopify 那边我以为权限配齐了，但接口还是 403，不知道哪个 scope 漏掉了",配置错误_SOP,search_api_docs_and_sop,SOP-001
+INC-017,4,"2月15号之后 PayPal 那条支付链路完全断了，我们没改任何代码，是发版动了什么吗",突发故障_Release,search_release_notes,v2.3.9
+INC-018,4,"你们能帮我们做 EDI 对接吗，我们大客户要求走 850/856 报文",超纲诉求,none,NONE
+INC-019,4,"能推荐一下你们系统适合什么规模的商家用吗，我们在评估要不要切换",超纲诉求,none,NONE
+INC-020,4,"我们前端页面翻页之后数据会重复，刷新才好，是已知 bug 吗",历史缺陷_Jira,search_known_issues,JIRA-1168
+INC-021,5,"webhook 投递日志里看到重复了，同一事件来了两次，downstream 那边因此扣了两次库存，怎么处理",历史缺陷_Jira,search_known_issues,JIRA-1130
+INC-022,5,"Kafka lag 最近高峰期经常爆，消费组配置要怎么调，还是说要扩容 consumer 节点",历史缺陷_Jira,search_known_issues,JIRA-1141
+INC-023,5,"接口响应时间突然变长了，APM 里看到有慢查询，slow_query_detected 日志一直刷，怎么排查",配置错误_SOP,search_api_docs_and_sop,SOP-012
+INC-024,5,"帮我起草一封给我们大客户的道歉邮件，上次系统故障影响了他们备货",超纲诉求,none,NONE
+INC-025,5,"你们数据中心在哪里，符合 GDPR 合规要求吗，我们欧洲业务要审计",超纲诉求,none,NONE
+INC-026,6,"订阅功能被锁了，明明昨天还好好的，日志有 billing_charge_failed，是不是 Stripe 那边的问题",配置错误_SOP,search_api_docs_and_sop,SOP-004
+INC-027,6,"v2.4.1 发版之后闰年日期那个 bug 修了吗，我们 2 月 29 日的运单之前一直有问题",突发故障_Release,search_release_notes,v2.4.1
+INC-028,6,"同一批货拆成了三张运单，运费各自单独算，比整批算贵了不少，是 bug 还是逻辑就这样",超纲诉求,none,NONE
+INC-029,6,"前端用了一会儿就开始卡顿，内存一直涨，刷新页面才好，这个问题有进展吗",历史缺陷_Jira,search_known_issues,JIRA-1088
+INC-030,6,"为什么我的导出按钮是灰色的，点不了",纯噪音,none,NONE
+INC-031,7,"导出超过十万行又超时了，上次也是这样，客户天天催，有没有临时绕过方案",历史缺陷_Jira,search_known_issues,JIRA-1059
+INC-032,7,"WooCommerce 接入时日志一直报 woocommerce_auth_failed，API Key 是读写权限，还是有问题",配置错误_SOP,search_api_docs_and_sop,SOP-006
+INC-033,7,"你们支持帮我们做全链路压测方案吗，618 大促要冲量，怕扛不住",超纲诉求,none,NONE
+INC-034,7,"最近接口偶尔返回 502，高并发的时候特别明显，是你们网关问题还是我们调用姿势不对",纯噪音,none,NONE
+INC-035,7,"我们用阿拉伯语商品描述同步的时候老是超时，换成英文就没问题，有没有相关记录",历史缺陷_Jira,search_known_issues,JIRA-1042
+INC-036,8,"Amazon SP-API 那边 LWA token 老是提前失效，重新授权完过几个小时又不行了",历史缺陷_Jira,search_known_issues,JIRA-1175
+INC-037,8,"运单号更新了，但前端还是显示旧的号码，日志有 cache_not_invalidated，Redis 缓存没刷新",配置错误_SOP,search_api_docs_and_sop,SOP-010
+INC-038,8,"系统能不能集成我们自己的 WMS，通过 API 直接同步库存数量",超纲诉求,none,NONE
+INC-039,8,"你们的 AI 客服功能什么时候上线，我们想降低客服人力成本",超纲诉求,none,NONE
+INC-040,8,"欧洲那边的订单时间差了一小时，是夏令时切换导致的吗还是时区配置问题",纯噪音,none,NONE
+INC-041,9,"1 月底数据库维护那次，12 分钟写不进数据，有几百张单状态没更新，怎么核查丢了多少",突发故障_Release,search_release_notes,v2.3.8
+INC-042,9,"webhook 一直没推过来，我们等了半小时，是 Kafka 积压了吗，backlog 怎么查",配置错误_SOP,search_api_docs_and_sop,SOP-008
+INC-043,9,"你们系统可以帮我们做销售预测吗，我们想提前备货",超纲诉求,none,NONE
+INC-044,9,"signature_mismatch 报错，我们签名算法是 HMAC-SHA256，参数顺序也对齐文档了，时间戳差了多少会影响",边界提问,none,NONE
+INC-045,9,"为什么有时候物流状态好几天不更新，不知道是运营商那边的问题还是你们抓取的问题",纯噪音,none,NONE
+INC-046,10,"PDF 发票下载下来乱码，不是每次，大概三四成的概率，客户已经投诉两次了",历史缺陷_Jira,search_known_issues,JIRA-0755
+INC-047,10,"订单同步有延迟，Shopify 那边下单之后过了二十多分钟才进来，偶发但客户反馈频繁",配置错误_SOP,search_api_docs_and_sop,SOP-009
+INC-048,10,"能帮我对比一下你们和 ShipStation 的功能差异吗，我们在做选型",超纲诉求,none,NONE
+INC-049,10,"rate_limited=true 一直出现，我们调的是 SF 顺丰接口，限额是多少，能不能提高",边界提问,none,NONE
+INC-050,10,"系统上次更新完之后我的自定义报表模板全没了，这是怎么回事",纯噪音,none,NONE

@@ -1,21 +1,22 @@
-# ReviewOps - 用户反馈决策中台
+# ReviewOps - B2B SaaS 研发智能问诊中台
 
-一个基于 RAG + LLM 的 B端 SaaS 原型，帮助产品经理分析用户反馈并生成可执行的行动建议。
+一个基于 RAG + LLM 的 B 端 SaaS 原型，帮助支持团队与产品经理分析客诉工单、归因问题并生成可执行的行动建议。
 
 ## ✨ 功能特性
 
-- **智能语义聚类**：使用 LLM 自动发现用户反馈中的主要抱怨点
-- **RAG 归因分析**：基于产品说明书进行智能归因，识别问题根源
-- **动态行动生成**：根据 RAG 分析结果自动生成针对性的行动计划
-- **增量巡检架构**：支持定时任务和手动触发的增量数据同步
-- **Mock 工作流集成**：模拟真实的工作流集成（Jira、Notion、Email 等）
+- **LangGraph 智能巡检**：Monitor → Filter → RAG → Agent 诊断路由 → 行动生成（Email / Jira / Escalate）
+- **RAG 归因分析**：基于 `saas_knowledge.txt` 知识库（SOP、已知缺陷、发版说明）进行按 `doc_type` 约束的 Tool 检索与归因
+- **晨会数据大盘**：黄金三指标（AI 闭环率、疑难升级率、缺陷识别率）+ LLM 动态晨报 + 工单工作台
+- **增量批次巡检**：按 `Batch_ID` 顺序从 `incremental_tickets.csv` 逐批拉取，支持演示「定时/按需同步」
+- **单票实验室**：单条客诉 Dry-run 归因，可选写入正式库
+- **SQLite 持久化**：工单、分析结果、巡检游标与批次流水账写入 `reviewops.db`，支持基线预热与增量累加
 
 ## 🚀 快速开始
 
 ### 环境要求
 
 - Python 3.8+
-- DashScope API Key (阿里云千问)
+- DashScope API Key（阿里云千问）
 
 ### 安装依赖
 
@@ -32,36 +33,34 @@ pip install -r requirements.txt
    cp .env.example .env
    ```
 
-2. 编辑 `.env` 文件，填入你的 API Key：
+2. 编辑 `.env`，填入 API Key：
    ```bash
    DASHSCOPE_API_KEY=your-dashscope-api-key-here
    ```
 
-**备选方式（环境变量）**：
+**获取 API Key**：访问 [DashScope 控制台](https://dashscope.console.aliyun.com/) → API-KEY 管理。
 
-```bash
-export DASHSCOPE_API_KEY="your-dashscope-api-key"
-```
-
-**获取 API Key**：
-1. 访问 https://dashscope.console.aliyun.com/
-2. 注册/登录阿里云账号
-3. 在 API-KEY 管理页面创建新的 API Key
-
-> 💡 **提示**：`.env` 文件已在 `.gitignore` 中，不会被提交到 Git，可以安全地存储你的 API Key。
+> `.env` 已在 `.gitignore` 中，不会被提交到 Git。
 
 ### 构建知识库
-
-首先运行数据摄入脚本，将产品说明书向量化：
 
 ```bash
 python injest.py
 ```
 
-这将：
-- 读取 `dji_spec.pdf`（产品说明书）
-- 进行文档切分和向量化
-- 保存到 `./chroma_db` 目录
+读取 `saas_knowledge.txt`，切分并向量化，写入仓库根目录下的 `chroma_db/`（路径与启动 cwd 无关，见 `src/config.py`）。
+
+### 预热冷启动基线（推荐）
+
+首次演示前，建议对冷启动工单跑一遍完整 LLM 分析，写入大盘基线：
+
+```bash
+python seed_db.py
+```
+
+该脚本会：预检向量库 → 清空 `tickets` 表 → 对 `cold_start_tickets.csv` 全量跑 LangGraph → 写入 `rag_result` / `action_plan`。
+
+> 修改 Prompt、RAG 阈值或知识库后，需重新 `python injest.py` 并 `python seed_db.py`，否则大盘仍是旧分析结果。
 
 ### 启动应用
 
@@ -69,206 +68,180 @@ python injest.py
 streamlit run app.py
 ```
 
-应用将在 http://localhost:8501 启动
+浏览器打开 http://localhost:8501
 
 ## 📁 项目结构
 
 ```
 reviewops/
-├── src/                      # 核心业务逻辑模块
-│   ├── __init__.py
-│   ├── config.py            # 配置管理（集中管理所有配置参数）
-│   ├── state.py             # 状态定义（ReviewState 和 reducer）
-│   ├── utils.py             # 工具函数（LLM 初始化等）
-│   ├── graph.py             # 工作流图构建（LangGraph 组装）
-│   └── nodes/                # 工作流节点模块
-│       ├── __init__.py
-│       ├── monitor.py       # 监控节点（数据生成）
-│       ├── filter.py        # 筛选节点（高危评论筛选）
-│       ├── rag.py           # RAG 分析节点（归因分析）
-│       └── action.py        # 行动生成节点
-├── app.py                   # Streamlit UI（仅保留界面渲染逻辑）
-├── injest.py                # 数据摄入脚本
-├── requirements.txt         # Python 依赖
-├── user_reviews.csv         # 用户评论数据
-├── dji_spec.pdf             # 产品说明书（PDF）
-├── chroma_db/               # 向量数据库（自动生成，已忽略）
-└── README.md                # 项目说明
+├── src/
+│   ├── config.py              # 配置（LLM / RAG / Monitor / 路径解析）
+│   ├── state.py               # LangGraph 状态定义
+│   ├── graph.py               # 工作流图组装
+│   ├── utils.py               # LLM 初始化等工具
+│   ├── tools.py               # RAG Tool（向量检索）
+│   ├── services/
+│   │   └── database.py        # SQLite 封装（reviewops.db）
+│   ├── nodes/
+│   │   ├── monitor.py         # 工单拉取（冷启动 / 增量 Batch_ID）
+│   │   ├── filter.py          # 高危工单筛选
+│   │   ├── rag.py             # RAG 归因
+│   │   ├── agent.py           # 诊断路由（四类枚举）
+│   │   └── action.py          # 行动生成 + 写 DB
+│   └── ui/
+│       ├── tab_dashboard.py   # 晨会大盘 + 智能巡检工作台
+│       ├── tab_playground.py  # 单票实验室
+│       └── state.py           # session_state 初始化
+├── app.py                     # Streamlit 入口（三页导航）
+├── injest.py                  # 知识库向量化（注意文件名拼写）
+├── seed_db.py                 # 冷启动基线预热（真实 LLM）
+├── clear_data.py              # 清空增量或全量工单
+├── cold_start_tickets.csv     # 冷启动存量（10 条 CS-*）
+├── incremental_tickets.csv    # 增量巡检（50 条 INC-*，Batch_ID 1~10）
+├── saas_knowledge.txt         # RAG 知识库原文
+├── reviewops.db               # SQLite（运行后生成）
+├── chroma_db/                 # 向量库（运行 injest 后生成）
+├── docs/
+│   ├── PRD_CURRENT.md         # 当前实现版 PRD
+│   └── DATA_CALIBER_AND_SOURCES.md  # 数据口径说明（实现对照）
+└── tests/                     # pytest 单元测试
 ```
 
 ## ⚙️ 配置管理
 
-所有配置参数集中在 `src/config.py` 中管理，支持通过环境变量覆盖默认值：
+配置集中在 `src/config.py`，支持环境变量覆盖：
 
-### LLM 配置
+### LLM
 
 ```bash
-# .env 文件
-LLM_MODEL=qwen-plus              # LLM 模型名称
-LLM_TEMPERATURE=0                # 温度参数（0-1）
+LLM_MODEL=qwen3.7-max-2026-05-17
+LLM_TEMPERATURE=0
+DASHSCOPE_API_KEY=your-key
 ```
 
-### Embedding 配置
+### 向量库 / RAG
 
 ```bash
-EMBEDDING_MODEL=text-embedding-v3  # Embedding 模型名称
+VECTOR_DB_PATH=./chroma_db
+RAG_TOOL_TOP_K=1
+RAG_SCORE_THRESHOLD=0.25
+RAG_CHROMA_FETCH_K=24
 ```
 
-### 向量数据库配置
+### Monitor（工单数据源）
 
 ```bash
-VECTOR_DB_PATH=./chroma_db         # 向量数据库路径
-RAG_TOP_K=5                        # RAG 检索文档数量
-RAG_DISTANCE_THRESHOLD=1.5         # 距离阈值
-RAG_MAX_CONTEXT_LENGTH=300         # 每个文档的最大长度
-RAG_MAX_DOCS_IN_CONTEXT=3         # 上下文中的最大文档数
-```
-
-### 筛选节点配置
-
-```bash
-FILTER_RATING_THRESHOLD=3          # 高危评论评分阈值（低于此评分为高危）
-```
-
-### 监控节点配置
-
-```bash
-MONITOR_MIN_REVIEWS=2              # 每批最少评论数
-MONITOR_MUST_HAVE_POSITIVE=true    # 是否必须包含正面评论
-```
-
-### 行动生成配置
-
-```bash
-ACTION_DEFAULT_TYPE=Jira Ticket    # 默认行动类型
-ACTION_DEFAULT_PRIORITY=Medium     # 默认优先级
+MONITOR_MIN_TICKETS=7
+MONITOR_TICKETS_CSV_PATH=cold_start_tickets.csv
+MONITOR_TICKETS_INCREMENTAL_CSV=incremental_tickets.csv
+MONITOR_SEED_CSV=                    # 非空时 seed_db 强制使用该 CSV
 ```
 
 ## 🔧 技术栈
 
-- **前端框架**：Streamlit
-- **数据处理**：Pandas
-- **可视化**：Plotly
-- **工作流引擎**：LangGraph
-- **RAG 框架**：LangChain
-- **向量数据库**：ChromaDB
-- **Embedding 模型**：阿里云 DashScope (text-embedding-v3)
-- **LLM 模型**：阿里云千问 (qwen-plus)
+- **前端**：Streamlit
+- **工作流**：LangGraph
+- **RAG**：LangChain + ChromaDB + DashScope Embedding（text-embedding-v3）
+- **LLM**：阿里千问（qwen3.7-max-2026-05-17，可通过 `LLM_MODEL` 覆盖）
+- **存储**：SQLite（`reviewops.db`）
+- **数据**：Pandas
 
 ## 📊 核心功能
 
-### 1. 数据概览
-- 总评论数、平均评分、负面评价占比
-- AI 每日简报
-- 增量数据统计
+### 1. 晨会数据大盘
 
-### 2. 智能巡检控制台
-- **增量巡检架构**：每次运行视为新的增量同步，数据累加而非重置
-- **实时工作流**：基于 LangGraph 的智能工作流执行
-- **RAG 归因分析**：自动提取负面评价，基于产品说明书进行 RAG 检索和归因
-- **动态行动生成**：根据 RAG 归因结论自动生成行动计划
-- **历史记录管理**：Hero + History 分层展示，最新结果直接展示，历史记录可折叠查看
+- **数据概览**：全库工单数、AI 独立闭环率、估算节省工时、需研发介入单量
+- **AI 技术简报**：基于 DB 真实数据 + LLM 生成（点击按钮触发）
+- **工单工作台**：一线待办（待处理 / 已闭环）、研发疑难队列
 
-### 3. 行动建议类型
-支持多种行动类型：
+> 指标口径详见 [docs/DATA_CALIBER_AND_SOURCES.md](docs/DATA_CALIBER_AND_SOURCES.md)。
+
+### 2. 智能巡检工作台
+
+- 点击「▶️ 运行全量智能工作流」触发 LangGraph
+- 从 `incremental_tickets.csv` 按 `Batch_ID` 顺序拉取当前批次（不随机）
+- 实时 Pipeline 日志 + 可恢复的「批次流水账」
+- 分析结果写入 DB，在晨会大盘闭环处理
+
+### 3. 单票实验室
+
+- 输入单条客诉，Tool 调用归因
+- 默认 Dry-run；勾选后可写入正式 `tickets` 表
+
+### 4. 行动建议类型
+
 - 🐞 **Jira Ticket**（产品缺陷）
-- 📝 **Doc Update**（文档更新）
-- 📧 **Email Draft**（客服邮件）
-- 📅 **Meeting**（会议安排）
-
-按优先级自动排序（High / Medium / Low）
+- 📧 **Email Draft**（客服邮件 / SOP 闭环）
+- ⬆️ **Escalate**（疑难转 L2 / 人工）
+- 筛选节点可将低危工单标记为 **intercepted**（无需进入 RAG）
 
 ## 🏗️ 架构设计
 
-### 模块化设计
+### 工作流
 
-项目采用模块化架构，职责清晰：
+```
+monitor → filter → rag_analysis → agent_node
+  → generate_email | generate_jira | escalate_human
+  → next_route →（循环或 END）
+```
 
-- **`src/state.py`**：定义工作流状态结构和状态合并逻辑
-- **`src/config.py`**：集中管理所有配置参数，支持环境变量覆盖
-- **`src/utils.py`**：工具函数（LLM 初始化等）
-- **`src/graph.py`**：工作流图构建和路由逻辑
-- **`src/nodes/`**：各个工作流节点的实现
-  - `monitor.py`：数据监控和生成
-  - `filter.py`：高危评论筛选
-  - `rag.py`：RAG 归因分析
-  - `action.py`：行动建议生成
-- **`app.py`**：仅包含 Streamlit UI 渲染逻辑
+### 数据流
 
-### 增量巡检架构
+| 阶段 | 数据源 | 说明 |
+|------|--------|------|
+| 冷启动 | `cold_start_tickets.csv` | App 空库自动 pending 入库；`seed_db.py` 全量分析 |
+| 增量巡检 | `incremental_tickets.csv` | 按 `Batch_ID` 逐批，状态 `monitor_next_batch_id` 轮转 |
+| 持久化 | `reviewops.db` | 分析结果、状态、指标统计、巡检游标与批次流水账 SSOT |
 
-- **幂等性保证**：通过 `processed_ids` 避免重复处理
-- **数据累加**：每次运行将新数据追加到全局状态
-- **历史记录**：所有巡检批次保存在 `incident_history` 中
-- **实时反馈**：工作流执行过程实时显示
+### 模块化职责
 
-## 🔒 安全提示
-
-⚠️ **重要**：在提交代码到 GitHub 之前，请确保：
-
-1. 移除所有硬编码的 API Key
-2. 使用环境变量或 `.env` 文件管理敏感信息
-3. 将 `.env` 添加到 `.gitignore`
+- `src/graph.py`：图构建与路由
+- `src/nodes/`：各节点实现
+- `src/services/database.py`：DB 与黄金指标分桶
+- `src/ui/`：Streamlit 页面与 session 状态
+- `app.py`：页面路由与侧边栏
 
 ## 📝 使用说明
 
-### 1. 准备数据
-- 将用户评论数据放入 `user_reviews.csv`
-- 将产品说明书 PDF 放入项目根目录
+### 典型演示流程
 
-### 2. 构建知识库
+1. `cp .env.example .env` 并配置 API Key
+2. `python injest.py` 构建向量库
+3. `python seed_db.py` 预热冷启动基线（可选但推荐）
+4. `streamlit run app.py`
+5. 在「晨会数据大盘」查看指标与工单
+6. 在「智能巡检工作台」多次运行工作流，模拟增量批次（Batch 1 → 2 → …）
+7. 在「单票实验室」测试单条归因
+
+### 重置数据
+
 ```bash
-python injest.py
+# 仅删除增量工单（保留 CS-* 基线）
+python clear_data.py
+
+# 清空全部后重新 seed
+python clear_data.py --all
+python seed_db.py
 ```
 
-### 3. 启动应用
+## 🧪 开发与测试
+
 ```bash
-streamlit run app.py
+pytest tests/ -q
 ```
 
-### 4. 使用流程
+- **新增节点**：在 `src/nodes/` 添加模块，在 `src/graph.py` 注册
+- **调整筛选**：`src/config.py` → `FilterConfig.KEYWORDS`
+- **优化 RAG**：`src/config.py` → `VectorStoreConfig`，或调整 `injest.py` 切分策略
+- **数据口径**：修改指标时同步更新 `docs/DATA_CALIBER_AND_SOURCES.md`
 
-#### 智能巡检控制台（增量模式）
+## 🔒 安全提示
 
-1. **配置 API Key**：在侧边栏输入 DashScope API Key
-2. **运行工作流**：点击"⚡ 运行智能工作流"按钮
-3. **查看结果**：
-   - **Hero Section**：最新巡检结果直接展示
-   - **History Section**：历史巡检记录可折叠查看
-4. **数据概览**：顶部 Dashboard 实时更新统计数据
-5. **查看行动建议**：每个归因结果对应一个行动建议，可点击按钮执行操作
+提交代码前请确保：
 
-#### 手动分析模式
-
-1. 在侧边栏配置 API Key
-2. 点击"开始归因分析"
-3. 查看 RAG 分析结果
-4. 查看自动生成的行动建议
-5. 点击按钮执行相应操作
-
-## 🧪 开发指南
-
-### 添加新节点
-
-1. 在 `src/nodes/` 目录下创建新文件，例如 `custom_node.py`
-2. 实现节点函数，接受 `ReviewState` 并返回 `ReviewState`
-3. 在 `src/graph.py` 中导入并添加到工作流图
-
-### 修改配置
-
-所有配置参数在 `src/config.py` 中集中管理，支持：
-- 代码中直接修改默认值
-- 通过环境变量覆盖（推荐用于不同环境）
-
-### 扩展功能
-
-- **新增行动类型**：修改 `src/nodes/action.py` 中的 prompt
-- **调整筛选规则**：修改 `src/config.py` 中的 `FilterConfig.KEYWORDS`
-- **优化 RAG 检索**：调整 `VectorStoreConfig` 中的参数
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
+1. 无硬编码 API Key
+2. `.env` 不进入版本库
+3. 敏感配置仅通过环境变量管理
 
 ## 📄 许可证
 
