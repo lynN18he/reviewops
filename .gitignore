@@ -35,6 +35,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Generated evaluation outputs
+eval_results.csv
+
 # Temporary files
 *.tmp
 *.temp

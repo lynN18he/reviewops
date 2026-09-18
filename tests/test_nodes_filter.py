@@ -11,7 +11,7 @@ from src.state import TicketState
 class TestNodeFilter:
     """测试筛选节点"""
     
-    def test_node_filter_empty_reviews(self):
+    def test_node_filter_empty_tickets(self):
         """测试空工单列表"""
         state: TicketState = {
             "incr_tickets": [],

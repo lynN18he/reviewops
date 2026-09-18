@@ -8,7 +8,7 @@ import pandas as pd
 import time
 import datetime
 from zoneinfo import ZoneInfo
-from src.ui.cards import render_incident_card
+from src.ui.cards import render_ticket_card
 from src.graph import graph_app
 from src.services.database import get_database
 from src.utils import sanitize_stored_rag_text_for_ui
@@ -263,7 +263,7 @@ def render_page_dashboard(calculate_metrics):
                             if action_plan and isinstance(action_plan, dict):
                                 action_item = action_plan.copy()
                                 action_item["ticket_id"] = ticket_id
-                            render_incident_card(
+                            render_ticket_card(
                                 rag_result_obj,
                                 action_item,
                                 batch_idx=0,
@@ -291,7 +291,7 @@ def render_page_dashboard(calculate_metrics):
                             if action_plan and isinstance(action_plan, dict):
                                 action_item = action_plan.copy()
                                 action_item["ticket_id"] = record.get("ticket_id")
-                            render_incident_card(
+                            render_ticket_card(
                                 rag_result_obj, action_item, batch_idx=1, item_idx=idx
                             )
                             if idx < len(resolved_records) - 1:
@@ -421,7 +421,10 @@ def render_tab(api_key, calculate_metrics):
                     "processed_route_types": [],
                     "action_plans": [],
                     "logs": [],
-                    "processed_ids": st.session_state.get('processed_ids', [])
+                    "processed_ids": st.session_state.get('processed_ids', []),
+                    "monitor_next_batch_id": int(
+                        st.session_state.get("monitor_next_batch_id") or 1
+                    ),
                 }
             
                 # 清空本次巡检的结果（只保留历史数据）
@@ -560,13 +563,24 @@ def render_tab(api_key, calculate_metrics):
                     st.session_state.run_history = []
                 st.session_state.run_history.insert(0, batch_record)
 
+                db = get_database()
+                db.save_workflow_run(batch_record)
+                db.set_last_run_time(current_time)
+                if final_state.get("monitor_next_batch_id") is not None:
+                    db.set_monitor_next_batch_id(int(final_state["monitor_next_batch_id"]))
+
                 st.session_state["workflow_result"] = result
                 st.session_state["workflow_completed"] = True
                 st.session_state["diagnosis_category"] = result.get("diagnosis_category", [])
                 st.session_state["need_refresh"] = True
 
+                if final_state.get("monitor_next_batch_id") is not None:
+                    st.session_state["monitor_next_batch_id"] = int(
+                        final_state["monitor_next_batch_id"]
+                    )
+
                 st.rerun()
-            
+
             except ImportError as e:
                 st.error(f"❌ 无法导入工作流模块: {e}")
                 st.caption("请确保 `src/graph.py` 存在且已正确配置。")

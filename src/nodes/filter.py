@@ -8,14 +8,8 @@ import json
 from src.state import TicketState
 from src.utils import init_llm
 from src.services.database import get_database
+from src.config import FilterConfig
 from langchain_core.messages import HumanMessage
-
-# 降级模式：LLM 失败时，工单文本包含以下任一关键词即视为高危
-FALLBACK_SAAS_KEYWORDS = [
-    "502", "504", "白屏", "宕机", "全不更新", "无法登陆",
-    "无法登录", "登录失败", "同步失败", "订单同步", "大面积", "业务停摆",
-    "资损", "理赔", "403", "401", "鉴权失效", "数据库超时",
-]
 
 
 def node_filter(state: TicketState) -> TicketState:
@@ -121,7 +115,7 @@ def node_filter(state: TicketState) -> TicketState:
         critical_tickets = []
         for ticket in incr_tickets:
             text = ticket.get("ticket_content", "") or ""
-            if any(kw in text for kw in FALLBACK_SAAS_KEYWORDS):
+            if any(kw in text for kw in FilterConfig.KEYWORDS):
                 critical_tickets.append(ticket)
 
         # 数据状态闭环：降级模式下同样将非高危的 pending 工单更新为 intercepted

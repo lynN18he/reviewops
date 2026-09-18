@@ -2,15 +2,13 @@
 ReviewOps 状态定义（B2B 工单分诊）
 """
 
-from typing import TypedDict, List
+from typing import TypedDict, List, NotRequired
 
 # 诊断路由类型（agent_node 仅输出以下四类，用于条件边强拦截）
 NEW_REGRESSION = "NEW_REGRESSION"           # 新 Bug/发版故障 -> P0 Jira
 USER_CONFIG_ERROR = "USER_CONFIG_ERROR"     # 用户配置错误 -> 邮件+SOP
 KNOWN_ISSUE = "KNOWN_ISSUE"                # 已知缺陷（已有 Jira）-> 邮件+原 Jira+Workaround
 UNKNOWN_ESCALATE = "UNKNOWN_ESCALATE"       # 未知需人工 -> 转 L2 人工
-# 兼容旧键
-UNKNOWN = UNKNOWN_ESCALATE
 
 
 class TicketState(TypedDict):
@@ -24,31 +22,4 @@ class TicketState(TypedDict):
     action_plans: List[dict]
     logs: List[str]
     processed_ids: List[str]
-
-
-def reducer(state: TicketState, update: TicketState) -> TicketState:
-    """合并状态更新"""
-    merged = state.copy()
-
-    if "logs" in update:
-        merged["logs"] = state.get("logs", []) + update.get("logs", [])
-    if "incr_tickets" in update:
-        merged["incr_tickets"] = update.get("incr_tickets", [])
-    if "critical_tickets" in update:
-        merged["critical_tickets"] = update.get("critical_tickets", [])
-    if "rag_analysis_results" in update:
-        merged["rag_analysis_results"] = update.get("rag_analysis_results", [])
-    if "diagnosis_routes" in update:
-        merged["diagnosis_routes"] = update.get("diagnosis_routes", [])
-    if "diagnosis_category" in update:
-        merged["diagnosis_category"] = update.get("diagnosis_category", [])
-    if "processed_route_types" in update:
-        merged["processed_route_types"] = state.get("processed_route_types", []) + update.get("processed_route_types", [])
-    if "action_plans" in update:
-        merged["action_plans"] = state.get("action_plans", []) + update.get("action_plans", [])
-    if "processed_ids" in update:
-        existing_ids = set(state.get("processed_ids", []))
-        new_ids = set(update.get("processed_ids", []))
-        merged["processed_ids"] = list(existing_ids | new_ids)
-
-    return merged
+    monitor_next_batch_id: NotRequired[int]

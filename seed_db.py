@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 黄金基线数据库预热脚本
-读取 test_tickets.csv，调用 LangGraph 工作流进行真实 LLM 分析，将完整结果写入 SQLite。
+读取 cold_start_tickets.csv（MONITOR_SEED_CSV），调用 LangGraph 工作流进行真实 LLM 分析，将完整结果写入 SQLite。
 运行方式：python seed_db.py
 完成后启动 streamlit run app.py，大盘将展示已分析的基线数据。
 
@@ -15,8 +15,8 @@
 import os
 import sys
 
-# 必须在导入 graph 之前设置，使 monitor 使用 test_tickets.csv 且全量处理
-os.environ["MONITOR_SEED_CSV"] = "test_tickets.csv"
+# 必须在导入 graph 之前设置，使 monitor 使用冷启动 CSV 且全量处理
+os.environ["MONITOR_SEED_CSV"] = "cold_start_tickets.csv"
 
 from dotenv import load_dotenv
 
@@ -99,7 +99,7 @@ def main():
         "processed_ids": [],
     }
 
-    print("🚀 启动 LangGraph 工作流，对 test_tickets.csv 进行全量 LLM 分析...")
+    print("🚀 启动 LangGraph 工作流，对冷启动 CSV 进行全量 LLM 分析...")
     final_state = initial_state.copy()
     for event in graph_app.stream(initial_state):
         for node_name, node_output in event.items():

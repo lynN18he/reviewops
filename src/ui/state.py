@@ -17,10 +17,15 @@ def init_session_state(tickets_df: pd.DataFrame, calculate_metrics):
         tickets_df: 工单数据 DataFrame（含 ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
         calculate_metrics: 计算指标函数，返回 get_dashboard_metrics() 的 8 元组
     """
+    db = get_database()
+
     # 检查并初始化 all_tickets（与 Graph 兼容：ticket_id, ticket_content, user_id, timestamp, urgency_level, category）
     if 'all_tickets' not in st.session_state:
-        db = get_database()
         db_tickets = db.get_all_tickets()
+        if not db_tickets:
+            # 空库：预载冷启动 CSV 为 pending，大盘/工作台有单可查；跑一轮巡检后写入 RAG/行动
+            db.cold_start_ingest_tickets()
+            db_tickets = db.get_all_tickets()
         if db_tickets:
             st.session_state.all_tickets = [
                 {
@@ -60,21 +65,15 @@ def init_session_state(tickets_df: pd.DataFrame, calculate_metrics):
 
     # 初始化增量巡检相关状态
     if 'last_run_time' not in st.session_state:
-        st.session_state.last_run_time = None
+        st.session_state.last_run_time = db.get_last_run_time()
     if 'incremental_rag_results' not in st.session_state:
         st.session_state.incremental_rag_results = []  # 存储本次巡检的RAG结果
-
-    # 初始化历史巡检记录（实时风险动态流，Hero 区域使用 session_state）
-    if 'incident_history' not in st.session_state:
-        st.session_state.incident_history = []
-    # 一次性清理：迁移到 B2B 工单后清空旧批次，避免展示历史中的「评论/无人机」残留
-    if not st.session_state.get('incident_history_tickets_migrated', False):
-        st.session_state.incident_history = []
-        st.session_state['incident_history_tickets_migrated'] = True
+    if 'monitor_next_batch_id' not in st.session_state:
+        st.session_state.monitor_next_batch_id = db.get_monitor_next_batch_id(default=1)
 
     # 工作台批次流水账（不覆盖，向下堆叠）
     if 'run_history' not in st.session_state:
-        st.session_state.run_history = []
+        st.session_state.run_history = db.get_workflow_runs(limit=20)
 
     # 晨会简报（防丢失）
     if 'daily_briefing' not in st.session_state:

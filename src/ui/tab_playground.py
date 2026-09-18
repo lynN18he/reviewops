@@ -237,7 +237,7 @@ def render_tab(api_key):
         "客诉或日志原文",
         placeholder="例如：昨天还好好的，今天早上 USPS 的轨迹全不更新了！",
         height=100,
-        key="manual_review_input"
+        key="manual_ticket_input"
     )
 
     write_to_dashboard = st.checkbox(

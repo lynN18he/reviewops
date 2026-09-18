@@ -4,23 +4,21 @@ Agent 工具定义：B2B 电商履约与物流 SaaS 技术支持场景
 similarity_score_threshold Retriever；见环境变量 RAG_SCORE_THRESHOLD。
 """
 
-import os
-
 from langchain_core.tools import tool
 
 from src.config import VectorStoreConfig
 
 # 检索返回条数：默认 1，环境变量最多建议不超过 2
-CHROMA_TOP_K = min(2, max(1, int(os.getenv("RAG_TOOL_TOP_K", "1"))))
-# 相关性分数阈值（0~1，越高越严）
-def _float_env(key: str, default: str) -> float:
-    raw = (os.getenv(key) or default).strip()
-    return float(raw)
-
-
-RAG_SCORE_THRESHOLD = _float_env("RAG_SCORE_THRESHOLD", "0.25")
+CHROMA_TOP_K = VectorStoreConfig.TOOL_TOP_K
+RAG_SCORE_THRESHOLD = VectorStoreConfig.SCORE_THRESHOLD
 # similarity_score_threshold 模式下，k 为从向量库拉取的候选条数；过小会导致阈值过滤后常为空
-RAG_CHROMA_FETCH_K = int(os.getenv("RAG_CHROMA_FETCH_K", "24"))
+RAG_CHROMA_FETCH_K = VectorStoreConfig.CHROMA_FETCH_K
+
+_DOC_TYPE_FILTERS = {
+    "jira_ticket": {"doc_type": "jira_ticket"},
+    "release_note": {"doc_type": "release_note"},
+    "SOP": {"doc_type": "SOP"},
+}
 
 
 def _get_vectorstore():
@@ -78,7 +76,7 @@ def _format_retrieved_docs(docs) -> str:
     return "\n\n---\n\n".join(formatted_results)
 
 
-def _search_chroma(query: str, k: int = CHROMA_TOP_K) -> str:
+def _search_chroma(query: str, k: int = CHROMA_TOP_K, *, doc_type: str | None = None) -> str:
     """
     使用 LangChain Retriever（similarity_score_threshold）；候选池用较大 fetch_k，
     再截断为 k 条，避免 k=1 时阈值过滤后无结果。
@@ -87,23 +85,35 @@ def _search_chroma(query: str, k: int = CHROMA_TOP_K) -> str:
     if not vs:
         return "未检索到相关文档"
     fetch_k = max(RAG_CHROMA_FETCH_K, k, 4)
+    metadata_filter = _DOC_TYPE_FILTERS.get(doc_type) if doc_type else None
+    search_kwargs = {
+        "score_threshold": RAG_SCORE_THRESHOLD,
+        "k": fetch_k,
+    }
+    if metadata_filter:
+        search_kwargs["filter"] = metadata_filter
     try:
         retriever = vs.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={
-                "score_threshold": RAG_SCORE_THRESHOLD,
-                "k": fetch_k,
-            },
+            search_kwargs=search_kwargs,
         )
         docs = retriever.invoke(query)[:k]
         if not docs:
-            docs = vs.similarity_search(query, k=fetch_k)[:k]
+            docs = (
+                vs.similarity_search(query, k=fetch_k, filter=metadata_filter)[:k]
+                if metadata_filter
+                else vs.similarity_search(query, k=fetch_k)[:k]
+            )
         if not docs:
             return "未检索到相关文档"
         return _format_retrieved_docs(docs)
     except Exception:
         try:
-            docs = vs.similarity_search(query, k=fetch_k)[:k]
+            docs = (
+                vs.similarity_search(query, k=fetch_k, filter=metadata_filter)[:k]
+                if metadata_filter
+                else vs.similarity_search(query, k=fetch_k)[:k]
+            )
             return _format_retrieved_docs(docs) if docs else "未检索到相关文档"
         except Exception:
             return "未检索到相关文档"
@@ -114,19 +124,19 @@ def _search_chroma(query: str, k: int = CHROMA_TOP_K) -> str:
 @tool
 def search_known_issues(query: str) -> str:
     """用于检索产研团队内部的已知缺陷库和历史 Jira 工单。当用户描述的故障没有明显的 API 错误码，且带有「又来了、一直这样、老毛病」等特定边缘场景或规律性问题时调用。"""
-    return _search_chroma(query)
+    return _search_chroma(query, doc_type="jira_ticket")
 
 
 @tool
 def search_release_notes(query: str) -> str:
     """用于检索系统最近的发版记录和底层服务变更日志。当用户明确表示「昨天还好好的，今天突然不行了」、「更新之后白屏/断流」等强时间突变特征时调用。"""
-    return _search_chroma(query)
+    return _search_chroma(query, doc_type="release_note")
 
 
 @tool
 def search_api_docs_and_sop(query: str) -> str:
     """用于检索 API 接口文档和客服标准排查 SOP。当用户反馈中包含具体错误码（如 401, 403, Auth-9002）、HMAC 验签失败、或者不懂如何配置 Webhook 和授权时调用。"""
-    return _search_chroma(query)
+    return _search_chroma(query, doc_type="SOP")
 
 
 # ==================== 工具列表（供 Agent bind_tools 使用）====================

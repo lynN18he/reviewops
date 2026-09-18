@@ -1,0 +1,11 @@
+Ticket_ID,Batch_ID,User_Message,True_Category,Expected_Tool,Expected_Ground_Truth_ID
+CS-001,0,"日志里一直刷 HMAC validation failed，401 打死了，token 是上周刚换的，不知道哪里出了问题，客户那边已经等了两个小时了",历史缺陷_Jira,search_known_issues,JIRA-1175
+CS-002,0,"Amazon 那边的订单 Token 感觉隔几个小时就自动失效了，LWA 明明没过期，重授权完一会儿又不行，这个 bug 有没有记录",历史缺陷_Jira,search_known_issues,JIRA-1175
+CS-003,0,"2月15号之后 PayPal 支付那条链路整个挂了，客户反馈付不了款，我们这边代码没动过，是不是你们发版改了什么",突发故障_Release,search_release_notes,v2.3.9
+CS-004,0,"上个月底数据库维护那次，我们有 12 分钟完全写不进数据，事后发现有几百条订单状态没更新，这个怎么补救",突发故障_Release,search_release_notes,v2.3.8
+CS-005,0,"SOP-005 里说跨时区用 UTC 存储，但我们欧洲客户的订单时间全是错的，差了整整一个小时，夏令时切换那天开始的",配置错误_SOP,search_api_docs_and_sop,SOP-005
+CS-006,0,"webhook 配了半天，日志里看到 woocommerce_auth_failed，API Key 是只读的还是读写的？文档说要配什么权限来着",配置错误_SOP,search_api_docs_and_sop,SOP-006
+CS-007,0,"为什么我们的运费有时候差几分钱？财务对账对不上，量不大但每天都有，不知道是精度问题还是汇率问题",历史缺陷_Jira,search_known_issues,JIRA-1107
+CS-008,0,"能帮我预测一下明年 Q2 的物流成本趋势吗？我们要做年度预算规划",超纲诉求,none,NONE
+CS-009,0,"你好 我要投诉 你们系统太慢了！！！每次都卡！！！退钱！！！",纯噪音,none,NONE
+CS-010,0,"我们想把你们的 SaaS 和 SAP ERP 打通，直接同步库存和财务数据，这个支持吗",超纲诉求,none,NONE

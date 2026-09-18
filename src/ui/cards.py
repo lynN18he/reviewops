@@ -29,7 +29,7 @@ def _success_icon(body: str, icon: str) -> None:
         st.success(body)
 
 
-def render_incident_card(rag_result, action_item, batch_idx=0, item_idx=0, show_resolve_button=False, resolve_callback=None):
+def render_ticket_card(rag_result, action_item, batch_idx=0, item_idx=0, show_resolve_button=False, resolve_callback=None):
     """
     单条工单：左栏只读信息用 info/success/markdown；右栏可编辑草稿与操作。
     """

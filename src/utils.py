@@ -23,6 +23,22 @@ _SERVICE_ERROR_MARKERS = (
 )
 
 
+def normalize_expected_ground_truth_id(value) -> str:
+    """
+    CSV 列 Expected_Ground_Truth_ID 中 NONE / null / - 等表示「无期望溯源」，
+    不应在 UI 或 rag_result 中当作真实 ID 展示。
+    """
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return ""
+    u = s.upper().replace("—", "-")
+    if u in ("NONE", "NULL", "N/A", "NA", "-", ""):
+        return ""
+    return s
+
+
 def sanitize_stored_rag_text_for_ui(text: str) -> str:
     """
     将已落库的 RAG reason/evidence 中的底层网络/连接异常替换为业务可读说明（不改 DB，仅展示用）。

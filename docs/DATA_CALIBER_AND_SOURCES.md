@@ -2,56 +2,73 @@
 
 本文档按模块梳理当前系统中**每一部分的数据口径和来源**，便于排查不一致和后续改造。
 
+> 文件名约定（2026-04 起）：`cold_start_tickets.csv`（冷启动存量）、`incremental_tickets.csv`（增量巡检）。早期测试 CSV 命名已废弃。
+
 ---
 
 ## 一、数据源总览
 
 | 数据源 | 说明 | 使用处 |
 |--------|------|--------|
-| **SQLite `tickets` 表** | 持久化存储：工单基础信息 + `rag_result` / `action_plan`（分析结果） | 看板指标、简报 total、all_tickets 初始化、历史记录、指标计算 |
-| **test_tickets.csv** | 存量工单 CSV，启动时由 `load_tickets()` 读取 | 仅用于 `tickets_df` → 当 DB 为空时初始化 `all_tickets` |
-| **test_tickets_incremental.csv** | 增量工单 CSV | 工作流 monitor 节点：每次巡检从此文件读取并入库 |
-| **st.session_state** | 会话状态（all_tickets、incident_history、last_run_increment 等） | 看板渲染、Hero、历史去重、delta 展示 |
+| **SQLite `tickets` 表**（`reviewops.db`） | 持久化工单 + `rag_result` / `action_plan` / `status` / `analyzed_at` | 看板指标、工单工作台、简报采样、monitor 去重 |
+| **SQLite `workflow_meta` / `workflow_runs`** | 持久化巡检游标、上次运行时间、批次流水账 | App 初始化恢复状态、巡检页展示历史批次 |
+| **cold_start_tickets.csv** | 冷启动存量（10 条 CS-*，含评测标注列） | App 空库自动摄入；`seed_db.py` 全量分析基线；monitor 主路径 |
+| **incremental_tickets.csv** | 增量巡检（50 条 INC-*，按 `Batch_ID` 1~10 分批） | monitor 节点：每次「运行智能工作流」拉取当前批次 |
+| **saas_knowledge.txt** + **chroma_db/** | RAG 知识库与向量索引；chunk metadata 含 `doc_type` | `injest.py` 构建；RAG Tool 按 `doc_type` 检索 |
+| **st.session_state** | 会话内 UI 缓存（`all_tickets`、本轮临时 RAG 结果等） | 页面渲染与运行中日志；关键巡检状态从 DB 恢复 |
 
 ---
 
 ## 二、各模块数据口径与来源
 
-### 1. 顶部「数据概览」三个指标卡
+### 1. 晨会数据大盘 — 顶部「数据概览」四张指标卡
 
-| 指标 | 口径（当前实现） | 数据来源 |
-|------|------------------|----------|
-| **今日工单总数** | `tickets` 表 **全表** `COUNT(*)`，**无**“今日”时间过滤 | `calculate_metrics()` → `db.get_dashboard_metrics()` → `SELECT COUNT(*) FROM tickets` |
-| **L1 智能拦截率** | 分子：被判定为「未转研发」的工单数；分母：同上全表总数；率 = 分子/分母×100%，保留 1 位小数 | 同上；分子由每条记录的 `action_plan`(JSON) 的 `action_type` 及 `category` 判定（见下） |
-| **P0 研发升级率** | 分子：被判定为「转研发」的工单数；分母：全表总数；率 = 分子/分母×100% | 同上 |
+实现位置：`src/ui/tab_dashboard.py` → `render_dashboard_metrics()` → `app.calculate_metrics()` → `db.get_dashboard_metrics()`。
 
-**拦截/升级判定规则**（`get_dashboard_metrics()` 内）：
+| 指标（UI 文案） | 口径（当前实现） | 数据来源 |
+|----------------|------------------|----------|
+| **📥 今日新增工单** | `tickets` 表 **全表** `COUNT(*)`（含 `pending`）；**无**「今日」时间过滤，Demo 以全库条数模拟单日流量 | `get_dashboard_metrics()[0]` |
+| **🤖 AI 独立闭环率** | 分子：`resolved` 分桶条数；分母：`status != 'pending'` 的已处理条数；保留 1 位小数 | `get_dashboard_metrics()[1]`、`[5]` |
+| **⏱️ 约节省客服工时** | `resolved_count × 0.25`（假设每单人工 15 分钟） | 由 `[5]` 推导，非 DB 字段 |
+| **🚨 需研发介入单量** | `escalated_count + jira_count`（疑难转 L2 + 已知缺陷 Jira） | `get_dashboard_metrics()[6]`、`[7]` |
 
-- **算作升级（escalated_count）**：`action_type == "Jira Ticket"` 或 `category == "研发升级"`。
-- **算作拦截（deflected_count）**：`action_type in ("Email Draft", "Escalate")` 或 `category == "技术支援"`，或有其他非 Jira 的 `action_type`。
-- **未写入 `action_plan` 的工单**：既不记入拦截也不记入升级，只计入分母（total_tickets）。
+**黄金三指标互斥分桶**（`database._golden_ticket_bucket()`，优先级从高到低）：
 
-**注意**：指标名称是「今日工单总数」，但实现是**全表统计**，无日期过滤。
+| 分桶 | 判定条件 |
+|------|----------|
+| **jira** | `action_plan.action_type == "Jira Ticket"` |
+| **escalate** | `action_plan.action_type == "Escalate"` |
+| **resolved** | `status == "intercepted"` **或** `action_type == "Email Draft"` |
+| **None** | 以上均不满足（不计入三率分子，但若 `status != pending` 仍计入分母） |
+
+**三率分母**：仅 `status != 'pending'`（且非空）的工单；`pending` 积压**不计入**三率分母，但**计入**「今日新增工单」总数。
+
+**注意**：第一张卡片文案为「今日新增工单」，实现为**全库累计**，无 `created_at` 当日过滤；help 文案已说明 Demo 口径。
 
 ---
 
-### 2. 指标卡下方的「本次新增 X 条工单」（delta_total）
+### 2. AI 技术简报
+
+实现位置：`tab_dashboard._generate_daily_briefing()`（按钮「基于真实大盘数据生成晨报」触发）。
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| 本次新增条数 | 当前会话**最近一次**点击「运行智能工作流」时，本批新入库的工单条数 | `st.session_state.last_run_increment` |
-| 写入时机 | 工作流 stream 中检测到 `node_monitor` 的 `incr_tickets` 后：`last_run_increment = len(new_tickets)` |
+| **简报日期** | 上海时区当日 | `_briefing_today_zh()` |
+| **24h 采样列表** | 近 24h 内 `status IN ('analyzed','resolved')` 且 `is_test=0` 的工单，最多 100 条 | `db.get_briefing_tickets_24h()` |
+| **全库指标锚点** | 与顶部四张卡同源：`get_dashboard_metrics()` + `get_briefing_library_breakdown()` | 写入 LLM prompt  preamble，约束数字一致 |
+| **正文四节** | LLM 动态生成（非固定模板） | 千问 LLM，基于采样 + 全库分解 |
+
+简报**会**引用 DB 的 `rag_result` / `action_plan` 做叙事采样；全库比例须与大盘一致，24h 窗口与全库累计在 preamble 中显式区分。
 
 ---
 
-### 3. AI 技术简报
+### 3. 晨会数据大盘 — 工单工作台
 
-| 项目 | 口径 | 数据来源 |
-|------|------|----------|
-| **「今日共处理 X 条工单」中的 X** | 与看板「今日工单总数」一致 | `generate_ai_brief(..., total_tickets)`，`total_tickets` 来自 `calculate_metrics()` → `get_dashboard_metrics()` 的 total |
-| **其余正文**（整体系统健康度、核心故障发现、拦截成效、研发关注建议） | **固定模板**，无动态数据 | `app.py` 中 `generate_ai_brief()` 的硬编码字符串，仅 `{total}` 被替换 |
-
-简报**未**从 DB 的 `rag_result` / `action_plan` / `diagnosis_category` 聚合生成。
+| Tab | 口径 | 数据来源 |
+|-----|------|----------|
+| **一线待办 · 待处理** | `status='analyzed'` 且 `is_test=0`，且 `action_type IN ('Jira Ticket','Email Draft')` | `db.get_pending_tickets()` |
+| **一线待办 · 已闭环** | `status='resolved'` 且 `is_test=0` | `db.get_resolved_tickets()` |
+| **研发疑难** | `status='analyzed'` 且 `action_type='Escalate'` | `db.get_escalate_queue_tickets()` |
 
 ---
 
@@ -59,103 +76,135 @@
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| **用途** | 供「数据概览」区构造 `all_tickets_df`，仅用于传入 `calculate_metrics(all_tickets_df, ...)`；**calculate_metrics 内部忽略 df，只查 DB**，故 all_tickets 仅影响「是否构造空 DataFrame」 | `init_session_state()` 中**仅首次**初始化 |
-| **初始化逻辑** | 若 `db.get_all_tickets()` 非空 → `all_tickets` = DB 全量工单（映射为 ticket_id, user_id, timestamp, ticket_content, urgency_level, category）；否则 → `all_tickets` = **test_tickets.csv** 的 `tickets_df.to_dict('records')` | DB 优先；DB 空则用 CSV |
-| **后续更新** | 每次运行工作流后，`node_monitor` 产出的 `incr_tickets` 会 **extend** 到 `all_tickets` | `tab_dashboard.py` 中 `st.session_state.all_tickets.extend(new_tickets)` |
-
-因此：**看板三个指标不读 all_tickets**，只读 DB；all_tickets 主要用于「是否有数据建 DataFrame」以及列表展示（若有）。
-
----
-
-### 5. 智能工作流输入：`incr_tickets`
-
-| 项目 | 口径 | 数据来源 |
-|------|------|----------|
-| **每批条数** | 至少 `MIN_TICKETS_PER_BATCH` 条（默认 **2**），从当次读取的 CSV 中取「未入库且未在 processed_ids」的工单直到凑满 | `MonitorConfig.MIN_TICKETS_PER_BATCH`（环境变量 `MONITOR_MIN_TICKETS`） |
-| **CSV 来源** | 若存在 **test_tickets_incremental.csv** 则只从该文件读；否则从 **test_tickets.csv** 读 | `load_tickets_from_csv(csv_path, max_count=100)`，`csv_path` 由 monitor 节点按配置与文件存在性决定 |
-| **去重** | `ticket_id` 已在 DB 中存在（`db.exists(tid)`）或在当前 state 的 `processed_ids` 中则跳过 | monitor 节点内 |
-| **写入 DB** | 本批每条工单立即 `db.add_ticket(...)`，此时**尚无** `rag_result` / `action_plan` | monitor 节点 |
+| **用途** | 会话内工单列表缓存；**看板指标不读此列表**，只查 DB | `init_session_state()` |
+| **初始化** | DB 非空 → 映射 `get_all_tickets()`；DB 为空 → `cold_start_ingest_tickets()` 读 `cold_start_tickets.csv` 写入 pending，再读 DB | `src/ui/state.py` |
+| **回退** | 若 DB 与冷启动 CSV 均空 → `app.load_tickets()` 返回空表 | `cold_start_tickets.csv` |
+| **后续更新** | 每次巡检 monitor 产出 `incr_tickets` 后 `extend` | `tab_dashboard.render_tab()` |
 
 ---
 
-### 6. 工作流结果写入 DB（rag_result / action_plan）
+### 5. 智能工作流输入：`incr_tickets`（monitor 节点）
+
+实现位置：`src/nodes/monitor.py`。
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| **谁写入** | **仅 action 节点**（generate_email_node、generate_jira_node、escalate_human_node）在生成行动建议时调用 `_update_db_for_plans()` | `src/nodes/action.py` |
-| **写入内容** | 对每条被该节点处理的工单：`db.update_analysis(ticket_id, rag_result=..., action_plan=..., category=...)` | 同一批次内的 `rag_analysis_results` + 本节点产出的 `action_plan` |
-| **RAG 节点** | 只产出 `rag_analysis_results` 进入 state，**不写 DB**；写 DB 的 rag_result 来自 action 节点里带上的 RAG 结果 | `src/nodes/rag.py` 不调用 DB |
+| **增量模式** | 存在 `incremental_tickets.csv` 时，按 `state.monitor_next_batch_id` 读取**整批** `Batch_ID` 工单（**不随机**）；批次号每次运行 +1，超过最大 Batch_ID 后回到 1 | `load_incremental_batch()` |
+| **冷启动补跑** | 增量模式下，若冷启动 CSV 中有已在库且 `status=pending`、无 RAG 结论的 CS-*，前置并入本批 | `_pending_cold_incr_tickets()` |
+| **SEED 模式** | 环境变量 `MONITOR_SEED_CSV` 非空（如 `seed_db.py` 设 `cold_start_tickets.csv`）时，从该 CSV 顺序读取，最多 500 条 | `MonitorConfig.SEED_CSV` |
+| **非增量回退** | 无增量文件时，从 `MONITOR_TICKETS_CSV_PATH`（默认 `cold_start_tickets.csv`）读取，至多 `MIN_TICKETS_PER_BATCH` 条 | `MonitorConfig` |
+| **去重** | `ticket_id` 已在 DB 且非「待再次分析」则跳过；否则 `db.add_ticket(..., status='pending')` | `db.exists()` / `is_pending_needs_analysis()` |
+| **写入 DB 时机** | monitor 入库时**尚无** `rag_result` / `action_plan` | monitor 节点 |
 
-因此：**只有走过完整链路并进入某一 action 节点的工单**，才会在 DB 中有 `rag_result` 和 `action_plan`；仅入库但未进入 action 的工单，这两列为空。
+默认配置（`src/config.py`）：
+
+```bash
+MONITOR_MIN_TICKETS=7
+MONITOR_TICKETS_CSV_PATH=cold_start_tickets.csv
+MONITOR_TICKETS_INCREMENTAL_CSV=incremental_tickets.csv
+```
 
 ---
 
-### 7. Hero 区「本次巡检发现 (Latest)」
+### 6. 工作流结果写入 DB
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| **展示内容** | **最近一次**点击「运行智能工作流」产生的本批 RAG 结果 + 行动建议，按 ticket 成对展示 | `st.session_state.incident_history[0]` |
-| **单条记录结构** | `batch_record = { 'time', 'rag_results', 'actions', 'new_tickets_count', 'critical_count' }` | 工作流结束后用 `final_state` 的 `rag_analysis_results`、`action_plans`、`incr_tickets` 等拼出，并 `insert(0)` 进 `incident_history` |
-| **时间 / 新增条数** | `latest_time`、`latest_new_tickets` 来自该 batch 的 `time` 和 `new_tickets_count` | 同上 |
-
-Hero **不读 DB**，只读 session 中**当次运行**写进的 `incident_history` 首项。
+| **谁写入** | action 节点（`generate_email_node` / `generate_jira_node` / `escalate_human_node`）调用 `_update_db_for_plans()` | `src/nodes/action.py` |
+| **写入内容** | `rag_result`、`action_plan`、`category`、`status`（如 `analyzed` / `intercepted`）、`analyzed_at` | `db.update_analysis()` |
+| **RAG 节点** | 只产出 `rag_analysis_results` 进入 state，**不写 DB** | `src/nodes/rag.py` |
 
 ---
 
-### 8. 「历史巡检记录」列表
+### 7. 智能巡检工作台 — 批次流水账
+
+实现位置：`tab_dashboard.render_tab()` → `run_history`（session 缓存 + DB 持久化）。
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| **原始数据** | DB 中**最近 50 条**工单（按 `created_at DESC`），且每条必须有 `rag_result` 和 `action_plan` 非空 | `db.get_history(limit=50)` → `SELECT ... FROM tickets ORDER BY created_at DESC LIMIT 50` |
-| **去重** | 若 Hero 区有展示本批（incident_history[0]），则从历史列表中**排除**该批中出现的 `ticket_id`，避免与 Hero 重复 | `filtered_history` = 去掉 `hero_ticket_ids` 且 `rag_result`、`action_plan` 非空的记录 |
-| **展示分组** | 按工单的 `created_at` 的**日期**（YYYY-MM-DD）分组，同一天多条工单放在同一 expander 下 | 前端对 `filtered_history` 按 `created_at` 分组 |
+| **触发** | 点击「▶️ 运行全量智能工作流」 | LangGraph `graph_app.stream()` |
+| **单条 batch_record** | `{ batch_id, total_count, high_risk_tickets, safe_count, scanned_ids }` | 工作流 `final_state` + 高危摘要规则 |
+| **batch_id** | 本次运行开始时间 `YYYY-MM-DD HH:MM:SS` | 非 CSV 的 `Batch_ID` |
+| **高危摘要** | RAG 结果中 `action_type IN ('Jira Ticket','Email Draft')` 的条目 | 前端规则拼接，非 DB 查询 |
+| **持久性** | 写入 SQLite，可在刷新/重启后恢复 | `workflow_runs` |
 
-注意：**历史是按「工单」维度**（每条 DB 记录一条工单），不是按「巡检批次」维度；同一次巡检的多条工单会按各自 `created_at` 落在不同日期下。
+巡检页运行中仍使用当前会话展示实时日志；运行成功后，批次流水账写入 DB。长期结果同步至 DB 后，在「晨会数据大盘 → 工单工作台」查看与闭环。
 
 ---
 
-### 9. 侧边栏「数据源」与「最后更新」
+### 8. 单票实验室
 
 | 项目 | 口径 | 数据来源 |
 |------|------|----------|
-| 工单数据 / 知识库 / 向量库 | 静态说明文案 | 写死为 `test_tickets.csv`、`saas_knowledge.txt`、`./chroma_db` |
-| 最后更新 | **当前系统日期** | `datetime.now().strftime('%Y-%m-%d')`，非 DB 或 CSV 的最近更新时间 |
+| **分析路径** | 独立 Tool 调用（`match_with_spec`），**不经过**完整 LangGraph | `tab_playground.py` |
+| **Dry-run** | 默认勾选「不写入大盘」：仅前端展示 | 无 DB 写入 |
+| **写入正式库** | 勾选后写入 `tickets`（`is_test=0`，`source=single_ticket`） | 可选 DB 写入 |
+
+---
+
+### 9. 侧边栏「数据源」
+
+| 项目 | 口径 | 数据来源 |
+|------|------|----------|
+| 文案 | 静态说明 | `app.py` 侧边栏：知识库 / 冷启动 / 增量 CSV 文件名 |
+| API Key | 优先 `.env` 的 `DASHSCOPE_API_KEY`，否则侧边栏输入 | 环境变量或 `st.text_input` |
 
 ---
 
 ## 三、数据流简图
 
 ```
-启动时:
-  load_tickets() → test_tickets.csv → tickets_df
-  init_session_state: all_tickets = db.get_all_tickets() 或 tickets_df（DB 空时）
+启动 App:
+  init_session_state()
+    → DB 空? cold_start_ingest_tickets(cold_start_tickets.csv) → pending 入库
+    → all_tickets = DB 映射
+    → monitor_next_batch_id / last_run_time / run_history = DB 恢复
+  load_tickets() → cold_start_tickets.csv（侧边栏预览）
 
-每次渲染「数据概览」:
-  all_tickets → all_tickets_df（仅用于传参，可空）
-  calculate_metrics(all_tickets_df, ...) → 仅内部调用 db.get_dashboard_metrics()
-    → 今日工单总数 / L1 拦截率 / P0 升级率（全表，无时间过滤）
-  generate_ai_brief(all_tickets_df, total_tickets) → total 来自 DB，其余为固定模板
+渲染「晨会数据大盘」:
+  calculate_metrics() → db.get_dashboard_metrics()  → 四张指标卡
+  点击生成晨报 → _generate_daily_briefing() → LLM + DB 采样
 
-点击「运行智能工作流」:
-  monitor: test_tickets_incremental.csv（或 test_tickets.csv）→ 随机打乱 → 取未入库的至少 MIN 条
-    → db.add_ticket(...) → incr_tickets 产出
+点击「运行全量智能工作流」（智能巡检工作台）:
+  monitor:
+    incremental_tickets.csv[Batch_ID=N] + 冷启动 pending 补跑
+    → db.add_ticket(pending) → incr_tickets
+    → monitor_next_batch_id += 1
   filter → critical_tickets
   rag_analysis → rag_analysis_results（不写 DB）
-  agent_node → diagnosis_routes / diagnosis_category
-  action 节点 → action_plans，并 _update_db_for_plans() 写 DB（rag_result + action_plan）
-  结束后：incident_history.insert(0, batch_record)，all_tickets.extend(new_tickets)，last_run_increment = len(new_tickets)
+  agent_node → diagnosis_routes
+  action 节点 → action_plans + _update_db_for_plans() → DB
+  run_history.insert(0, batch_record) + save_workflow_run(batch_record)
+  monitor_next_batch_id / last_run_time → workflow_meta
+  all_tickets.extend(incr_tickets)
+
+黄金基线预热（可选，推荐首次）:
+  python injest.py
+  MONITOR_SEED_CSV=cold_start_tickets.csv python seed_db.py
+    → 清空 tickets → 跑完整图 → CS-* 写入 analyzed + rag/action
 ```
 
 ---
 
 ## 四、口径不一致与注意点汇总
 
-1. **「今日」名实不符**：指标名为「今日工单总数」，实际为 tickets 表全表 COUNT，无今日过滤。
-2. **简报与看板**：仅「今日共处理 X 条」与看板 total 一致；简报其余内容为固定模板，非 DB 聚合。
-3. **all_tickets 与指标**：指标不依赖 all_tickets 的数值，只依赖 DB；all_tickets 在 DB 为空时来自 CSV，可能导致「列表有数据、指标为 0」。
-4. **Hero vs 历史**：Hero 来自 session 当次运行结果；历史来自 DB 最近 50 条且排除 Hero 的 ticket_id，二者数据源不同。
-5. **历史按工单不按批次**：历史区按「单条工单」的 created_at 分组，不是按「巡检批次」分组；同一次巡检的多条工单可能分散在不同日期下。
+1. **「今日」名实不符**：「今日新增工单」= 全库 `COUNT(*)`，非当日 `created_at` 过滤。
+2. **三率分母 vs 总数**：总数含 `pending`；三率分母仅已处理（`status != pending`）。
+3. **CSV Batch_ID vs 运行 batch_id**：增量 CSV 的 `Batch_ID` 控制 monitor 拉取批次；UI `run_history.batch_id` 是运行时间戳，二者不同。
+4. **实时日志 vs 历史流水账**：运行中的日志仍在会话内展示；运行完成后的流水账持久化在 DB。
+5. **空库自动摄入 vs seed_db**：App 启动仅把冷启动 CSV **入库为 pending**；完整 LLM 分析需手动跑巡检或 `seed_db.py`。
+6. **单票实验室 vs 主流程**：实验室走简化 Tool 路径，与 LangGraph 全链路行为可能不一致。
 
 ---
 
-*文档版本：基于当前代码梳理，如有逻辑变更请同步更新此文档。*
+## 五、相关脚本
+
+| 脚本 | 作用 |
+|------|------|
+| `python injest.py` | 构建 / 重建 `chroma_db` 向量库 |
+| `python seed_db.py` | 清空 DB，对 `cold_start_tickets.csv` 跑完整工作流，写入分析基线 |
+| `python clear_data.py` | 默认仅删增量单（INC-*）；`--all` 清空全部 |
+
+---
+
+*文档版本：与当前代码对齐（2026-06）；逻辑变更时请同步更新。*

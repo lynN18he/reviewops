@@ -5,9 +5,15 @@
 import os
 import pytest
 from unittest.mock import patch
+from pathlib import Path
+
 from src.config import (
-    LLMConfig, EmbeddingConfig, VectorStoreConfig,
-    FilterConfig, MonitorConfig, ActionConfig, validate_config
+    LLMConfig,
+    EmbeddingConfig,
+    VectorStoreConfig,
+    FilterConfig,
+    MonitorConfig,
+    resolve_repo_relative_path,
 )
 
 
@@ -27,23 +33,23 @@ class TestLLMConfig:
     def test_validate_api_key_success(self):
         """测试 API Key 验证成功"""
         with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"}):
-            validate_config()  # 不应该抛出异常
+            LLMConfig.validate_api_key()  # 不应该抛出异常
     
     def test_validate_api_key_failure(self):
         """测试 API Key 验证失败"""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
-                validate_config()
+                LLMConfig.validate_api_key()
     
     def test_model_default(self):
         """测试模型默认值"""
         with patch.dict(os.environ, {}, clear=True):
-            assert LLMConfig.MODEL == "qwen3-max-2026-01-23"
+            assert LLMConfig.MODEL == "qwen3.7-max-2026-05-17"
     
     def test_model_from_env(self):
         """测试从环境变量读取模型"""
-        with patch.dict(os.environ, {"LLM_MODEL": "qwen-turbo"}):
-            assert os.getenv("LLM_MODEL", "qwen3-max-2026-01-23") == "qwen-turbo"
+        with patch.dict(os.environ, {"LLM_MODEL": "qwen3.6-plus"}):
+            assert os.getenv("LLM_MODEL", "qwen3.7-max-2026-05-17") == "qwen3.6-plus"
 
 
 class TestEmbeddingConfig:
@@ -66,10 +72,9 @@ class TestVectorStoreConfig:
         """测试默认值（向量库路径为绝对路径，不依赖进程 cwd）"""
         from pathlib import Path
         assert Path(VectorStoreConfig.PERSIST_DIRECTORY).is_absolute()
-        assert VectorStoreConfig.TOP_K == 5
-        assert VectorStoreConfig.DISTANCE_THRESHOLD == 1.5
-        assert VectorStoreConfig.MAX_CONTEXT_LENGTH == 300
-        assert VectorStoreConfig.MAX_DOCS_IN_CONTEXT == 3
+        assert VectorStoreConfig.TOOL_TOP_K == 1
+        assert VectorStoreConfig.SCORE_THRESHOLD == 0.25
+        assert VectorStoreConfig.CHROMA_FETCH_K == 24
 
 
 class TestFilterConfig:
@@ -89,14 +94,18 @@ class TestMonitorConfig:
     def test_default_values(self):
         """测试默认值"""
         assert MonitorConfig.MIN_TICKETS_PER_BATCH == 7
-        assert MonitorConfig.TICKETS_INCREMENTAL_CSV == "test_tickets_incremental.csv"
+        assert MonitorConfig.TICKETS_INCREMENTAL_CSV == "incremental_tickets.csv"
 
 
-class TestActionConfig:
-    """测试行动配置"""
-    
-    def test_default_values(self):
-        """测试默认值"""
-        assert ActionConfig.DEFAULT_ACTION_TYPE == "Jira Ticket"
-        assert ActionConfig.DEFAULT_PRIORITY == "Medium"
+class TestResolveRepoRelativePath:
+    def test_relative_csv_under_repo(self):
+        p = resolve_repo_relative_path("cold_start_tickets.csv")
+        assert Path(p).is_absolute()
+        assert Path(p).name == "cold_start_tickets.csv"
+
+    def test_absolute_unchanged(self):
+        abs_path = str(Path(__file__).resolve())
+        p = resolve_repo_relative_path(abs_path)
+        assert p == str(Path(abs_path).resolve())
+
 

@@ -9,9 +9,15 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from contextlib import contextmanager
+from pathlib import Path
+
+from src.config import resolve_repo_relative_path
 
 _TABLE = "tickets"
-_COLD_START_CSV = "test_tickets.csv"
+_WORKFLOW_META_TABLE = "workflow_meta"
+_WORKFLOW_RUNS_TABLE = "workflow_runs"
+COLD_START_CSV = "cold_start_tickets.csv"
+_COLD_START_CSV = COLD_START_CSV  # 兼容旧引用
 
 
 def _golden_ticket_bucket(status: Optional[str], action_plan_raw) -> Optional[str]:
@@ -96,9 +102,29 @@ class DatabaseManager:
                     pass  # column already exists
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_ticket_id ON {_TABLE}(ticket_id)")
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_created_at ON {_TABLE}(created_at)")
-            # 删除已废弃的 reviews 表，避免与 tickets 并存
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_WORKFLOW_META_TABLE} (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_WORKFLOW_RUNS_TABLE} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL UNIQUE,
+                    total_count INTEGER DEFAULT 0,
+                    safe_count INTEGER DEFAULT 0,
+                    scanned_ids TEXT,
+                    high_risk_tickets TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_workflow_runs_created_at ON {_WORKFLOW_RUNS_TABLE}(created_at)"
+            )
+            # 清理早期原型遗留表，避免旧数据影响当前 tickets 单表口径。
             cursor.execute("DROP TABLE IF EXISTS reviews")
-            # 若存在 incidents 表则清空其数据
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='incidents'")
             if cursor.fetchone():
                 cursor.execute("DELETE FROM incidents")
@@ -109,6 +135,119 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute(f"SELECT 1 FROM {_TABLE} WHERE ticket_id = ?", (ticket_id,))
             return cursor.fetchone() is not None
+
+    def is_pending_needs_analysis(self, ticket_id: str) -> bool:
+        """status=pending 且尚无有效 RAG 结论：可再次进入 monitor→filter 流水线。"""
+        row = self.get_ticket_by_id(ticket_id)
+        if not row:
+            return False
+        if (row.get("status") or "").strip() != "pending":
+            return False
+        rr = row.get("rag_result")
+        if rr is None:
+            return True
+        if isinstance(rr, dict):
+            return not (str(rr.get("conclusion") or "").strip())
+        return True
+
+    def get_workflow_meta(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT value FROM {_WORKFLOW_META_TABLE} WHERE key = ?",
+                (key,),
+            )
+            row = cursor.fetchone()
+            return row["value"] if row else default
+
+    def set_workflow_meta(self, key: str, value: str) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {_WORKFLOW_META_TABLE} (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, value),
+            )
+
+    def get_monitor_next_batch_id(self, default: int = 1) -> int:
+        raw = self.get_workflow_meta("monitor_next_batch_id")
+        try:
+            return int(raw) if raw is not None else int(default)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def set_monitor_next_batch_id(self, batch_id: int) -> None:
+        self.set_workflow_meta("monitor_next_batch_id", str(int(batch_id)))
+
+    def get_last_run_time(self) -> Optional[str]:
+        return self.get_workflow_meta("last_run_time")
+
+    def set_last_run_time(self, run_time: str) -> None:
+        self.set_workflow_meta("last_run_time", str(run_time))
+
+    def save_workflow_run(self, batch_record: Dict) -> Optional[int]:
+        batch_id = str(batch_record.get("batch_id") or "").strip()
+        if not batch_id:
+            return None
+        high_risk_tickets = batch_record.get("high_risk_tickets") or []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {_WORKFLOW_RUNS_TABLE}
+                    (batch_id, total_count, safe_count, scanned_ids, high_risk_tickets, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(batch_id) DO UPDATE SET
+                    total_count = excluded.total_count,
+                    safe_count = excluded.safe_count,
+                    scanned_ids = excluded.scanned_ids,
+                    high_risk_tickets = excluded.high_risk_tickets,
+                    created_at = excluded.created_at
+                """,
+                (
+                    batch_id,
+                    int(batch_record.get("total_count") or 0),
+                    int(batch_record.get("safe_count") or 0),
+                    str(batch_record.get("scanned_ids") or ""),
+                    json.dumps(high_risk_tickets, ensure_ascii=False),
+                    batch_id,
+                ),
+            )
+            cursor.execute(
+                f"SELECT id FROM {_WORKFLOW_RUNS_TABLE} WHERE batch_id = ?",
+                (batch_id,),
+            )
+            row = cursor.fetchone()
+            return row["id"] if row else None
+
+    def get_workflow_runs(self, limit: int = 20) -> List[Dict]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT batch_id, total_count, safe_count, scanned_ids, high_risk_tickets, created_at
+                FROM {_WORKFLOW_RUNS_TABLE}
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+        results: List[Dict] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["high_risk_tickets"] = json.loads(item.get("high_risk_tickets") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                item["high_risk_tickets"] = []
+            results.append(item)
+        return results
 
     def add_ticket(self, data: Dict) -> Optional[int]:
         ticket_id = data.get("ticket_id")
@@ -179,32 +318,6 @@ class DatabaseManager:
                 update_values,
             )
             return cursor.rowcount > 0
-
-    def get_history(self, limit: int = 20) -> List[Dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT id, ticket_id, ticket_content, source, timestamp, risk_level, rag_result, action_plan, created_at, urgency_level, category
-                FROM {_TABLE}
-                ORDER BY created_at DESC
-                LIMIT ?
-            """, (limit,))
-            return self._rows_to_dicts(cursor.fetchall())
-
-    def get_analyzed_tickets_for_dashboard(self, limit: int = 100) -> List[Dict]:
-        """
-        获取大盘历史巡检明细：status IN ('analyzed','resolved') 且 is_test=False，按 analyzed_at 倒序。
-        """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT id, ticket_id, ticket_content, source, timestamp, risk_level, rag_result, action_plan, created_at, urgency_level, category, analyzed_at
-                FROM {_TABLE}
-                WHERE status IN ('analyzed', 'resolved') AND (is_test = 0 OR is_test IS NULL)
-                ORDER BY COALESCE(analyzed_at, created_at) DESC, created_at DESC
-                LIMIT ?
-            """, (limit,))
-            return self._rows_to_dicts(cursor.fetchall())
 
     def get_briefing_tickets_24h(self, limit: int = 100) -> List[Dict]:
         """
@@ -512,6 +625,19 @@ class DatabaseManager:
             cursor.execute(f"DELETE FROM {_TABLE}")
             return count
 
+    def clear_incremental_tickets(self) -> int:
+        """
+        仅删除增量巡检入库的工单（保留冷启动 CS-* 及 seed 基线）。
+        以 source=incremental_tickets_csv 为准，并以 INC- 前缀兜底。
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"DELETE FROM {_TABLE} WHERE source = ? OR ticket_id LIKE ?",
+                ("incremental_tickets_csv", "INC-%"),
+            )
+            return int(cursor.rowcount or 0)
+
     def get_all_tickets(self) -> List[Dict]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -551,13 +677,18 @@ class DatabaseManager:
             results.append(result)
         return results
 
-    def cold_start_ingest_test_tickets(self, csv_path: str = _COLD_START_CSV) -> int:
+    def cold_start_ingest_tickets(self, csv_path: Optional[str] = None) -> int:
         """
-        冷启动摄入：当 DB 为空时，读取 test_tickets.csv 并批量插入原始工单。
+        冷启动摄入：当 DB 为空时，读取 cold_start_tickets.csv（或指定路径）并批量插入原始工单。
         仅插入 ticket_id, ticket_content, source, timestamp 等原始字段。
         status='pending'，rag_result/action_plan 均为空，等待工作流真实分析。
         返回插入条数。
         """
+        raw = (csv_path or COLD_START_CSV).strip() or COLD_START_CSV
+        if os.path.isabs(raw):
+            csv_path = str(Path(raw).resolve())
+        else:
+            csv_path = resolve_repo_relative_path(raw) or raw
         if not os.path.isfile(csv_path):
             return 0
         try:
@@ -602,7 +733,16 @@ _db_instance: Optional[DatabaseManager] = None
 
 
 def get_database(db_path: str = "reviewops.db") -> DatabaseManager:
+    """
+    单例 DB。默认路径相对仓库根解析，与 CSV / Chroma 一致，避免 cwd 不同导致「清库无效、扫描 0 条」。
+    """
     global _db_instance
     if _db_instance is None:
-        _db_instance = DatabaseManager(db_path)
+        raw = (db_path or "reviewops.db").strip() or "reviewops.db"
+        if os.path.isabs(raw):
+            resolved = str(Path(raw).resolve())
+        else:
+            r = resolve_repo_relative_path(raw)
+            resolved = r if r else raw
+        _db_instance = DatabaseManager(resolved)
     return _db_instance

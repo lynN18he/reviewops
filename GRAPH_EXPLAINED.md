@@ -4,69 +4,32 @@
 
 ---
 
-## 1. TicketState 的「追加模式」与「覆盖模式」
+## 1. TicketState 与状态流转
 
-### 1.1 什么是「追加」和「覆盖」？
+### 1.1 TicketState 是什么？
 
-可以把 `TicketState` 想象成一个**状态本**，里面有多类信息（字段）：
-
-- **追加模式**：新内容**接在**旧内容后面，不丢历史
-- **覆盖模式**：新内容**整体替换**旧内容，只保留当前批次
+可以把 `TicketState` 想象成 LangGraph 节点之间传递的**状态本**，里面记录本轮巡检的工单、RAG 结果、路由结果、行动建议和日志。
 
 ### 1.2 在哪里定义？
 
-在 **`src/state.py`** 的 **`reducer`** 中定义合并规则。
-
-```python
-# src/state.py
-
-def reducer(state: TicketState, update: TicketState) -> TicketState:
-    """合并状态更新"""
-    merged = state.copy()
-
-    if "logs" in update:
-        merged["logs"] = state.get("logs", []) + update.get("logs", [])
-
-    if "processed_ids" in update:
-        existing_ids = set(state.get("processed_ids", []))
-        new_ids = set(update.get("processed_ids", []))
-        merged["processed_ids"] = list(existing_ids | new_ids)
-
-    if "incr_tickets" in update:
-        merged["incr_tickets"] = update.get("incr_tickets", [])
-
-    if "critical_tickets" in update:
-        merged["critical_tickets"] = update.get("critical_tickets", [])
-
-    if "rag_analysis_results" in update:
-        merged["rag_analysis_results"] = update.get("rag_analysis_results", [])
-
-    if "action_plans" in update:
-        merged["action_plans"] = update.get("action_plans", [])
-
-    return merged
-```
+状态字段定义在 **`src/state.py`** 的 **`TicketState`** 中。当前 `src/graph.py` 使用 `StateGraph(TicketState)`；节点返回的字典会由 LangGraph 合并到当前状态中。需要累积的内容（例如多类 action plan）由节点自身读取当前 state 后追加返回。
 
 ### 1.3 字段分类总结
 
-| 字段名 | 模式 | 原因 | 示例 |
+| 字段名 | 当前语义 | 原因 | 示例 |
 |--------|------|------|------|
-| **`logs`** | ✅ **追加** | 保留完整执行历史，便于排查 | `[旧日志] + [新日志]` |
-| **`processed_ids`** | ✅ **并集合并** | 工单 ID 去重，避免重复处理 | `[TIK-051, TIK-052] \| [TIK-053] = [TIK-051, TIK-052, TIK-053]` |
-| **`incr_tickets`** | ❌ **覆盖** | 每次 Monitor 只产出「本批」增量工单 | `[工单1, 工单2]` → `[工单3, 工单4]` |
-| **`critical_tickets`** | ❌ **覆盖** | Filter 只筛选本批的高危工单 | `[高危1, 高危2]` → `[高危3, 高危4]` |
-| **`rag_analysis_results`** | ❌ **覆盖** | RAG 只分析本批工单的归因结果 | `[结果1, 结果2]` → `[结果3, 结果4]` |
-| **`action_plans`** | ❌ **覆盖** | Action 只生成本批的行动建议 | `[行动1, 行动2]` → `[行动3, 行动4]` |
+| **`logs`** | 节点运行日志 | 供 UI 实时展示本轮流水线过程 | `["monitor 日志", "filter 日志"]` |
+| **`processed_ids`** | 本轮已拉取/处理 ID | 工单 ID 去重，避免同一轮重复处理 | `[INC-001, INC-002]` |
+| **`incr_tickets`** | 本轮 monitor 产出的工单 | 每次运行只代表当前批次 | `[本批工单1, 本批工单2]` |
+| **`critical_tickets`** | 本轮高危工单 | Filter 只筛选当前批次 | `[高危1, 高危2]` |
+| **`rag_analysis_results`** | 本轮 RAG 归因结果 | RAG 只分析当前批次的高危工单 | `[结果1, 结果2]` |
+| **`action_plans`** | 本轮行动建议 | 各 action 节点在当前 state 基础上追加后返回 | `[邮件建议, Jira 建议]` |
 
 ### 1.4 为什么这样设计？
 
-- **追加（logs, processed_ids）**  
-  - `logs`：保留完整执行轨迹，方便调试与审计。  
-  - `processed_ids`：累积已处理工单 ID，保证幂等（同一条工单不重复分诊）。
-
-- **覆盖（其余字段）**  
-  - 这些字段表示**当前这一批**的数据，不是全量历史。  
-  - 每次运行只处理「本批」新工单，所以用新结果整体替换；例如 `incr_tickets` 表示「本批增量工单」，不是「全部历史工单」。
+- 大多数字段表示**当前这一批**的数据，不是全量历史。
+- 长期结果以 SQLite 为准：`tickets` 保存工单分析结果，`workflow_meta` / `workflow_runs` 保存巡检游标、上次运行时间和批次流水账；`st.session_state` 只作为页面渲染缓存。
+- `action_plans` 需要跨多个 action 节点累积，因此各 action 节点会读取已有 `state["action_plans"]` 后再追加本节点结果。
 
 ---
 
@@ -95,9 +58,9 @@ def reducer(state: TicketState, update: TicketState) -> TicketState:
 │  输入: state.processed_ids = [TIK-051, TIK-052, ...]            │
 │                                                                  │
 │  处理:                                                           │
-│    1. 优先从 test_tickets_incremental.csv 读取工单（否则从      │
-│       test_tickets.csv 读取）                                    │
-│    2. 打乱顺序后，按 MIN_TICKETS_PER_BATCH 取本批数量            │
+│    1. 优先从 incremental_tickets.csv 按 Batch_ID 读取整批工单   │
+│       （否则从 cold_start_tickets.csv 读取）                     │
+│    2. 增量模式下按批次顺序读取；非增量回退时按配置限制数量       │
 │    3. 过滤：已存在于 DB 或 processed_ids 的工单跳过              │
 │    4. 写入 SQLite（tickets 表），并生成本批 incr_tickets         │
 │                                                                  │
@@ -242,6 +205,7 @@ def reducer(state: TicketState, update: TicketState) -> TicketState:
 4. **持久化**  
    - Monitor：新工单写入 SQLite `tickets` 表。  
    - Action：同表更新 `rag_result`、`action_plan`、`urgency_level`、`category`。
+   - UI：工作流完成后写入 `workflow_meta` / `workflow_runs`，用于刷新或重启后恢复巡检状态。
 
 ---
 
@@ -285,7 +249,7 @@ def build_graph():
 
 - **校验图**：入口、连通性、条件边合法等。  
 - **生成执行计划**：从 monitor 开始，按边与条件决定下一步节点。  
-- **绑定 reducer**：状态合并按 `src/state.py` 的 `reducer` 执行。  
+- **合并节点输出**：节点返回的状态字段由 LangGraph 合并；需要累积的列表由节点自身读取旧 state 后追加返回。  
 - **得到可复用对象**：同一 `graph_app` 可多次 `stream(invoke)`，无需重新建图。
 
 ### 3.4 使用方式示例
@@ -330,9 +294,9 @@ final_state = graph_app.invoke(initial_state)
 
 | 组件 | 说明 |
 |------|------|
-| **数据源** | `test_tickets_incremental.csv`（优先）或 `test_tickets.csv`，格式一致（如 Ticket_ID, User_Message） |
-| **持久化** | SQLite `tickets` 表（ticket_id, ticket_content, urgency_level, category） |
-| **Monitor** | 从 CSV 随机取本批工单，去重后入库并产出 incr_tickets |
+| **数据源** | `incremental_tickets.csv`（优先，按 `Batch_ID`）或 `cold_start_tickets.csv`，格式一致（如 Ticket_ID, User_Message） |
+| **持久化** | SQLite `tickets` 表保存工单结果；`workflow_meta` / `workflow_runs` 保存巡检状态 |
+| **Monitor** | 从增量 CSV 按批次读取工单，去重后入库并产出 incr_tickets |
 | **Filter** | B2B SaaS 高危标准 + 关键词兜底，产出 critical_tickets |
 | **RAG** | L2 智能体 + Tool 调用（ChromaDB 检索），产出归因结论与证据 |
 | **Action** | 生成行动建议并回写 DB（含 urgency_level、category） |

@@ -7,7 +7,7 @@ import json
 import re
 
 from src.state import TicketState
-from src.utils import init_llm
+from src.utils import init_llm, normalize_expected_ground_truth_id
 from src.tools import (
     AGENT_SYSTEM_PROMPT,
     CHROMA_TOP_K,
@@ -99,7 +99,10 @@ def run_attribution_with_tools(llm, question: str, max_tool_rounds: int = 5):
     供 Playground 等调用：基于工具调用的归因分析。
     返回 (conclusion, reason, evidence, tool_outputs, knowledge_relevant)。
     """
-    return _run_agent_with_tools(llm, question, max_tool_rounds)
+    conclusion, reason, evidence, tool_outputs, kr, _ = _run_agent_with_tools(
+        llm, question, max_tool_rounds
+    )
+    return conclusion, reason, evidence, tool_outputs, kr
 
 
 def _parse_knowledge_relevant(raw) -> bool:
@@ -174,13 +177,15 @@ def _run_agent_with_tools(llm, ticket_content: str, max_tool_rounds: int = 5):
     """
     工具闭环：bind_tools 的 LLM 负责多轮 tool_calls；结束后用**未绑定工具**的 llm.invoke
     强制产出 JSON，避免首轮仅 tool_calls、content 为空时误走 JSON 解析失败。
-    返回 (conclusion, reason, evidence, tool_outputs, knowledge_relevant)；
-    解析失败时为 (None, None, None, tool_outputs, False)。
+    返回 (conclusion, reason, evidence, tool_outputs, knowledge_relevant, tools_called)；
+    解析失败时为 (None, None, None, tool_outputs, False, tools_called)。
+    tools_called 为按调用顺序记录的显式 tool 名称（不含兜底 _search_chroma）。
     """
     tools = get_support_agent_tools()
     tool_map = {t.name: t for t in tools}
     llm_with_tools = llm.bind_tools(tools)
     tool_outputs = []
+    tools_called: list[str] = []
 
     user_content = (
         f"用户反馈：{ticket_content}\n\n"
@@ -198,7 +203,7 @@ def _run_agent_with_tools(llm, ticket_content: str, max_tool_rounds: int = 5):
             ai_msg = llm_with_tools.invoke(messages)
         except Exception as e:
             c, r, ev = _user_facing_rag_failure(e)
-            return c, r, ev, tool_outputs, False
+            return c, r, ev, tool_outputs, False, tools_called
 
         messages.append(ai_msg)
         tcalls = getattr(ai_msg, "tool_calls", None) or []
@@ -224,6 +229,8 @@ def _run_agent_with_tools(llm, ticket_content: str, max_tool_rounds: int = 5):
                     x in str(e).lower()
                     for x in ("connection", "timeout", "ssl", "dashscope", "resolve", "443")
                 ) else f"工具执行异常，请稍后重试。（{type(e).__name__}）"
+            if name:
+                tools_called.append(str(name).strip())
             tool_outputs.append(str(tool_result))
             messages.append(ToolMessage(content=str(tool_result), tool_call_id=tc_id))
 
@@ -257,10 +264,10 @@ def _run_agent_with_tools(llm, ticket_content: str, max_tool_rounds: int = 5):
         answer = _normalize_msg_content(getattr(final_msg, "content", None))
     except Exception as e:
         c, r, ev = _user_facing_rag_failure(e)
-        return c, r, ev, tool_outputs, False
+        return c, r, ev, tool_outputs, False, tools_called
 
     if not answer:
-        return None, None, None, tool_outputs, False
+        return None, None, None, tool_outputs, False, tools_called
 
     json_str = answer.strip()
     if json_str.startswith("```json"):
@@ -290,9 +297,9 @@ def _run_agent_with_tools(llm, ticket_content: str, max_tool_rounds: int = 5):
         else:
             conclusion = _enforce_sop_vs_product_bug_conclusion(conclusion, evidence)
 
-        return (conclusion, reason, evidence, tool_outputs, kr)
+        return (conclusion, reason, evidence, tool_outputs, kr, tools_called)
     except json.JSONDecodeError:
-        return None, None, None, tool_outputs, False
+        return None, None, None, tool_outputs, False, tools_called
 
 
 def node_rag_analysis(state: TicketState) -> TicketState:
@@ -315,9 +322,23 @@ def node_rag_analysis(state: TicketState) -> TicketState:
     for ticket in critical_tickets:
         ticket_content = ticket.get("ticket_content", "")
         ticket_id = ticket.get("ticket_id", "")
+        gt_id = normalize_expected_ground_truth_id(ticket.get("expected_ground_truth_id"))
+
+        def _rag_entry(conclusion, reason, evidence, knowledge_relevant):
+            row = {
+                "ticket_id": ticket_id,
+                "ticket_content": ticket_content,
+                "conclusion": conclusion,
+                "reason": reason,
+                "evidence": evidence or "",
+                "knowledge_relevant": knowledge_relevant,
+            }
+            if gt_id:
+                row["expected_ground_truth_id"] = gt_id
+            return row
 
         try:
-            conclusion, reason, evidence, _, knowledge_relevant = _run_agent_with_tools(
+            conclusion, reason, evidence, _, knowledge_relevant, _ = _run_agent_with_tools(
                 llm, ticket_content
             )
             if conclusion is None:
@@ -327,24 +348,10 @@ def node_rag_analysis(state: TicketState) -> TicketState:
                     "",
                 )
                 knowledge_relevant = False
-            rag_results.append({
-                "ticket_id": ticket_id,
-                "ticket_content": ticket_content,
-                "conclusion": conclusion,
-                "reason": reason,
-                "evidence": evidence or "",
-                "knowledge_relevant": knowledge_relevant,
-            })
+            rag_results.append(_rag_entry(conclusion, reason, evidence, knowledge_relevant))
         except Exception as e:
             conclusion, reason, evidence = _user_facing_rag_failure(e)
-            rag_results.append({
-                "ticket_id": ticket_id,
-                "ticket_content": ticket_content,
-                "conclusion": conclusion,
-                "reason": reason,
-                "evidence": evidence,
-                "knowledge_relevant": False,
-            })
+            rag_results.append(_rag_entry(conclusion, reason, evidence, False))
 
     log_message = f"📄 RAG 分析节点：完成 {len(rag_results)} 条工单的归因分析"
     return {
